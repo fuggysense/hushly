@@ -53,10 +53,11 @@ export default function SignIn() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, justifyContent: 'center', padding: 24, gap: 12, backgroundColor: C.bg },
-  title: { color: C.textPrimary, fontSize: 28, fontWeight: '700', marginBottom: 12 },
+  title: { color: C.textPrimary, fontFamily: 'Inter-Light', fontSize: 28, marginBottom: 12 },
   input: {
     backgroundColor: C.elevated,
     color: C.textPrimary,
+    fontFamily: 'Inter-Regular',
     padding: 14,
     borderRadius: 10,
     fontSize: 16,
@@ -68,6 +69,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
-  btnText: { color: C.textPrimary, fontWeight: '600', fontSize: 16 },
-  link: { color: C.accent, textAlign: 'center', marginTop: 16 },
+  btnText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 16 },
+  link: { color: C.accent, fontFamily: 'Inter-Regular', textAlign: 'center', marginTop: 16 },
 });

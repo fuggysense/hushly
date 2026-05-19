@@ -503,15 +503,15 @@ const styles = StyleSheet.create({
   },
   brand: {
     color: C.textPrimary,
+    fontFamily: 'Inter-Light',
     fontSize: 22,
-    fontWeight: '700',
     letterSpacing: -0.4,
   },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerLink: {
     color: C.textSecondary,
+    fontFamily: 'Inter-Medium',
     fontSize: 13,
-    fontWeight: '500',
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
@@ -532,13 +532,13 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     backgroundColor: C.hairline,
     color: C.textPrimary,
+    fontFamily: 'JetBrainsMono-Medium',
     textAlign: 'center',
     lineHeight: 22,
     fontSize: 11,
-    fontWeight: '600',
     overflow: 'hidden',
   },
-  signOut: { color: C.textSecondary, fontSize: 12, fontWeight: '500' },
+  signOut: { color: C.textSecondary, fontFamily: 'Inter-Medium', fontSize: 12 },
   hairline: { height: 1, backgroundColor: C.hairline, marginHorizontal: 16 },
 
   middle: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
@@ -552,15 +552,15 @@ const styles = StyleSheet.create({
   transcriptContent: { padding: 20, paddingBottom: 32, flexGrow: 1 },
   eyebrow: {
     color: C.textTertiary,
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: 1.2,
     marginBottom: 8,
-    fontWeight: '600',
   },
   eyebrowSpaced: { marginTop: 24 },
-  cleaned: { color: C.textPrimary, fontSize: 19, lineHeight: 28 },
-  partial: { color: C.textSecondary, fontSize: 16, lineHeight: 26 },
+  cleaned: { color: C.textPrimary, fontFamily: 'Inter-Regular', fontSize: 19, lineHeight: 28 },
+  partial: { color: C.textSecondary, fontFamily: 'Inter-Regular', fontSize: 16, lineHeight: 26 },
 
   centerState: {
     flex: 1,
@@ -584,7 +584,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: C.textMuted,
   },
-  idleHint: { color: C.textTertiary, fontSize: 15, textAlign: 'center' },
+  idleHint: { color: C.textTertiary, fontFamily: 'Inter-Regular', fontSize: 15, textAlign: 'center' },
   inlineHint: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -603,23 +603,23 @@ const styles = StyleSheet.create({
   },
   kbdText: {
     color: C.textSecondary,
+    fontFamily: 'JetBrainsMono-Medium',
     fontSize: 12,
-    fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
   recTimer: {
     color: C.accent,
+    fontFamily: 'Inter-Light',
     fontSize: 44,
-    fontWeight: '700',
     fontVariant: ['tabular-nums'],
     letterSpacing: -1,
   },
-  recHint: { color: C.textTertiary, fontSize: 13, textAlign: 'center' },
-  workingHint: { color: C.textSecondary, fontSize: 15, marginTop: 6 },
+  recHint: { color: C.textTertiary, fontFamily: 'Inter-Regular', fontSize: 13, textAlign: 'center' },
+  workingHint: { color: C.textSecondary, fontFamily: 'Inter-Regular', fontSize: 15, marginTop: 6 },
 
   errRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 },
   errDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.accent },
-  errText: { color: C.accent, fontSize: 13, flex: 1 },
+  errText: { color: C.accent, fontFamily: 'Inter-Regular', fontSize: 13, flex: 1 },
 
   footer: { alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 16 },
 
@@ -641,8 +641,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusText: {
     color: C.textSecondary,
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 12,
-    fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
 
@@ -684,8 +684,8 @@ const styles = StyleSheet.create({
     height: '50%',
     backgroundColor: C.hairline,
   },
-  btnText: { color: C.textPrimary, fontSize: 17, fontWeight: '600', letterSpacing: -0.1 },
-  btnSecondaryText: { color: C.textPrimary, fontSize: 15, fontWeight: '500' },
+  btnText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 17, letterSpacing: -0.1 },
+  btnSecondaryText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 15 },
   btnRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
 
   metaRow: {
@@ -695,8 +695,8 @@ const styles = StyleSheet.create({
     minHeight: 24,
     marginTop: 2,
   },
-  editLink: { color: C.textMuted, fontSize: 12, fontWeight: '500' },
-  editSave: { color: C.accent, fontSize: 13, fontWeight: '600' },
+  editLink: { color: C.textMuted, fontFamily: 'JetBrainsMono-Regular', fontSize: 12 },
+  editSave: { color: C.accent, fontFamily: 'Inter-Medium', fontSize: 13 },
   labelInput: {
     color: C.textPrimary,
     backgroundColor: C.elevated,
@@ -706,6 +706,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 8,
     minWidth: 180,
+    fontFamily: 'Inter-Regular',
     fontSize: 14,
   },
 });

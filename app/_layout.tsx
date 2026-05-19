@@ -1,8 +1,12 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { useFonts } from 'expo-font';
+import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/lib/auth';
+
+SplashScreen.preventAutoHideAsync();
 
 function Gate() {
   const { session, loading } = useAuth();
@@ -36,6 +40,20 @@ function Gate() {
 }
 
 export default function RootLayout() {
+  const [loaded, error] = useFonts({
+    'JetBrainsMono-Regular': require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
+    'Inter-Light': require('../assets/fonts/Inter-Light.ttf'),
+    'Inter-Regular': require('../assets/fonts/Inter-Regular.ttf'),
+    'Inter-Medium': require('../assets/fonts/Inter-Medium.ttf'),
+  });
+
+  useEffect(() => {
+    if (loaded || error) SplashScreen.hideAsync();
+  }, [loaded, error]);
+
+  if (!loaded && !error) return null;
+
   return (
     <AuthProvider>
       <Gate />
