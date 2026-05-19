@@ -23,6 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var statusItem: NSStatusItem!
   private var settingsWindow: NSWindow?
   private var tabletTextField: NSTextField?
+  private var showTabletTextCheckbox: NSButton?
+  private var tabletImageStatusLabel: NSTextField?
+  private var tabletShapeControl: NSSegmentedControl?
+  private var tabletBorderColorWell: NSColorWell?
+  private var cropWindow: NSPanel?
+  private var cropPreview: TabletCropPreviewView?
+  private var cropZoomSlider: NSSlider?
+  private var cropXSlider: NSSlider?
+  private var cropYSlider: NSSlider?
+  private var cropImage: NSImage?
+  private var cropShape = TabletShape.rectangle
   private var shortcutButton: NSButton?
   private var shortcutCaptureWindow: NSPanel?
   private var shortcutCaptureMonitor: Any?
@@ -100,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     if notification.object as? NSWindow === settingsWindow {
       settingsWindow = nil
       tabletTextField = nil
+      showTabletTextCheckbox = nil
+      tabletImageStatusLabel = nil
+      tabletShapeControl = nil
+      tabletBorderColorWell = nil
       shortcutButton = nil
       apiBaseField = nil
       mainStatusLabel = nil
@@ -224,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.layer?.masksToBounds = true
 
     tabletView = TabletView(frame: NSRect(x: 8, y: 14, width: 200, height: 31))
-    tabletView.displayText = Preferences.shared.tabletText
+    applyTabletAppearance()
     content.addSubview(tabletView)
 
     statusLabel = NSTextField(labelWithString: "Ready")
@@ -236,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(statusLabel)
 
     tabletPanel.contentView = content
+    applyTabletAppearance()
   }
 
   @objc private func showTabletFromMenu() {
@@ -309,7 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       self.smoothedAudioLevel = 0
       self.tabletView.isRecording = true
       self.tabletView.audioLevel = 0
-      self.tabletView.displayText = Preferences.shared.tabletText
+      self.applyTabletAppearance()
       registerEscapeHotKey()
       installEscapeMonitors()
       startGlowAnimation()
@@ -535,6 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     guard let window = settingsWindow else { return }
     tabletTextField?.stringValue = Preferences.shared.tabletText
     apiBaseField?.stringValue = Preferences.shared.apiBase
+    applyTabletAppearance()
     refreshSettingsFields()
     if !isRecording {
       setReadyStatus()
@@ -563,7 +580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func buildSettingsWindow() {
     let width: CGFloat = 620
-    let height: CGFloat = 520
+    let height: CGFloat = 600
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable],
@@ -602,35 +619,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func buildSettingsPane(frame: NSRect) -> NSView {
     let content = NSView(frame: frame)
     let textLabel = NSTextField(labelWithString: "Tablet text")
-    textLabel.frame = NSRect(x: 32, y: 376, width: 120, height: 18)
+    textLabel.frame = NSRect(x: 32, y: 456, width: 120, height: 18)
     content.addSubview(textLabel)
 
     let textField = NSTextField(string: Preferences.shared.tabletText)
-    textField.frame = NSRect(x: 168, y: 370, width: 396, height: 30)
+    textField.frame = NSRect(x: 168, y: 450, width: 396, height: 30)
     content.addSubview(textField)
     tabletTextField = textField
 
+    let showText = NSButton(checkboxWithTitle: "Show text on tablet", target: self, action: #selector(tabletAppearanceControlChanged))
+    showText.frame = NSRect(x: 168, y: 416, width: 220, height: 24)
+    showText.state = Preferences.shared.showTabletText ? .on : .off
+    content.addSubview(showText)
+    showTabletTextCheckbox = showText
+
+    let imageLabel = NSTextField(labelWithString: "Tablet image")
+    imageLabel.frame = NSRect(x: 32, y: 380, width: 120, height: 18)
+    content.addSubview(imageLabel)
+
+    let chooseImageButton = NSButton(title: "Choose Image...", target: self, action: #selector(chooseTabletImage))
+    chooseImageButton.frame = NSRect(x: 168, y: 374, width: 124, height: 30)
+    chooseImageButton.bezelStyle = .rounded
+    content.addSubview(chooseImageButton)
+
+    let clearImageButton = NSButton(title: "Clear Image", target: self, action: #selector(clearTabletImage))
+    clearImageButton.frame = NSRect(x: 304, y: 374, width: 112, height: 30)
+    clearImageButton.bezelStyle = .rounded
+    content.addSubview(clearImageButton)
+
+    let imageStatus = NSTextField(labelWithString: tabletImageStatusText())
+    imageStatus.frame = NSRect(x: 168, y: 348, width: 396, height: 18)
+    imageStatus.font = NSFont.systemFont(ofSize: 11)
+    imageStatus.textColor = NSColor.secondaryLabelColor
+    imageStatus.lineBreakMode = .byTruncatingMiddle
+    content.addSubview(imageStatus)
+    tabletImageStatusLabel = imageStatus
+
+    let shapeLabel = NSTextField(labelWithString: "Shape")
+    shapeLabel.frame = NSRect(x: 32, y: 310, width: 120, height: 18)
+    content.addSubview(shapeLabel)
+
+    let shapeControl = NSSegmentedControl(labels: ["Rectangle", "Circle"], trackingMode: .selectOne, target: self, action: #selector(tabletAppearanceControlChanged))
+    shapeControl.frame = NSRect(x: 168, y: 304, width: 220, height: 28)
+    shapeControl.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
+    content.addSubview(shapeControl)
+    tabletShapeControl = shapeControl
+
+    let borderLabel = NSTextField(labelWithString: "Border color")
+    borderLabel.frame = NSRect(x: 32, y: 266, width: 120, height: 18)
+    content.addSubview(borderLabel)
+
+    let colorWell = NSColorWell(frame: NSRect(x: 168, y: 258, width: 58, height: 32))
+    colorWell.color = Preferences.shared.tabletBorderColor
+    colorWell.target = self
+    colorWell.action = #selector(tabletAppearanceControlChanged)
+    content.addSubview(colorWell)
+    tabletBorderColorWell = colorWell
+
     let shortcutLabel = NSTextField(labelWithString: "Shortcut")
-    shortcutLabel.frame = NSRect(x: 32, y: 318, width: 120, height: 18)
+    shortcutLabel.frame = NSRect(x: 32, y: 220, width: 120, height: 18)
     content.addSubview(shortcutLabel)
 
     let shortcutButton = NSButton(title: Preferences.shared.shortcut.title, target: self, action: #selector(beginShortcutCapture))
-    shortcutButton.frame = NSRect(x: 168, y: 312, width: 396, height: 32)
+    shortcutButton.frame = NSRect(x: 168, y: 214, width: 396, height: 32)
     shortcutButton.bezelStyle = .rounded
     content.addSubview(shortcutButton)
     self.shortcutButton = shortcutButton
 
     let apiLabel = NSTextField(labelWithString: "API base")
-    apiLabel.frame = NSRect(x: 32, y: 260, width: 120, height: 18)
+    apiLabel.frame = NSRect(x: 32, y: 162, width: 120, height: 18)
     content.addSubview(apiLabel)
 
     let apiField = NSTextField(string: Preferences.shared.apiBase)
-    apiField.frame = NSRect(x: 168, y: 254, width: 396, height: 30)
+    apiField.frame = NSRect(x: 168, y: 156, width: 396, height: 30)
     content.addSubview(apiField)
     apiBaseField = apiField
 
     let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
-    accessStatus.frame = NSRect(x: 32, y: 206, width: 532, height: 18)
+    accessStatus.frame = NSRect(x: 32, y: 108, width: 532, height: 18)
     accessStatus.textColor = NSColor.secondaryLabelColor
     accessStatus.font = NSFont.systemFont(ofSize: 11)
     accessStatus.lineBreakMode = .byTruncatingTail
@@ -639,7 +705,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     accessibilityStatusLabel = accessStatus
 
     let mainStatus = NSTextField(labelWithString: "Ready: \(Preferences.shared.shortcut.title)")
-    mainStatus.frame = NSRect(x: 32, y: 174, width: 532, height: 18)
+    mainStatus.frame = NSRect(x: 32, y: 76, width: 532, height: 18)
     mainStatus.textColor = NSColor.secondaryLabelColor
     mainStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
     mainStatus.lineBreakMode = .byTruncatingTail
@@ -648,12 +714,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     mainStatusLabel = mainStatus
 
     let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
-    dictateButton.frame = NSRect(x: 360, y: 112, width: 96, height: 32)
+    dictateButton.frame = NSRect(x: 360, y: 24, width: 96, height: 32)
     dictateButton.bezelStyle = .rounded
     content.addSubview(dictateButton)
 
     let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
-    saveButton.frame = NSRect(x: 468, y: 112, width: 96, height: 32)
+    saveButton.frame = NSRect(x: 468, y: 24, width: 96, height: 32)
     saveButton.bezelStyle = .rounded
     content.addSubview(saveButton)
 
@@ -746,9 +812,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func refreshSettingsFields() {
     tabletTextField?.stringValue = Preferences.shared.tabletText
+    showTabletTextCheckbox?.state = Preferences.shared.showTabletText ? .on : .off
+    tabletImageStatusLabel?.stringValue = tabletImageStatusText()
+    tabletShapeControl?.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
+    tabletBorderColorWell?.color = Preferences.shared.tabletBorderColor
     apiBaseField?.stringValue = Preferences.shared.apiBase
     shortcutButton?.title = Preferences.shared.shortcut.title
     refreshAccessibilityStatus()
+  }
+
+  private func applyTabletAppearance() {
+    tabletView?.displayText = Preferences.shared.tabletText
+    tabletView?.showsDisplayText = Preferences.shared.showTabletText
+    tabletView?.shape = Preferences.shared.tabletShape
+    tabletView?.borderColor = Preferences.shared.tabletBorderColor
+    tabletView?.customBackgroundImage = customTabletImage()
+    layoutTabletPanel()
+  }
+
+  private func customTabletImage() -> NSImage? {
+    let path = Preferences.shared.tabletImagePath
+    guard !path.isEmpty else { return nil }
+    return NSImage(contentsOfFile: path)
+  }
+
+  private func tabletImageStatusText() -> String {
+    let path = Preferences.shared.tabletImagePath
+    guard !path.isEmpty else { return "Using default glowing tablet" }
+    return "Using custom image: \(URL(fileURLWithPath: path).lastPathComponent)"
+  }
+
+  private func selectedTabletShape() -> TabletShape {
+    tabletShapeControl?.selectedSegment == 1 ? .circle : .rectangle
+  }
+
+  private func layoutTabletPanel() {
+    guard let tabletPanel, let content = tabletPanel.contentView else { return }
+    let shape = Preferences.shared.tabletShape
+    let size = shape.panelSize
+    let origin = tabletPanel.frame.origin
+    content.frame = NSRect(origin: .zero, size: size)
+    content.layer?.backgroundColor = NSColor.clear.cgColor
+    content.layer?.cornerRadius = shape == .circle ? size.width / 2 : 13
+    tabletView?.frame = shape.tabletFrame
+    statusLabel?.isHidden = shape == .circle
+    statusLabel?.frame = NSRect(x: 12, y: 3, width: size.width - 24, height: 10)
+    tabletPanel.setContentSize(size)
+    tabletPanel.setFrameOrigin(origin)
   }
 
   private func refreshHistoryUI() {
@@ -1085,16 +1195,181 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     return status == noErr
   }
 
+  @objc private func tabletAppearanceControlChanged() {
+    Preferences.shared.showTabletText = showTabletTextCheckbox?.state == .on
+    Preferences.shared.tabletShape = selectedTabletShape()
+    if let color = tabletBorderColorWell?.color {
+      Preferences.shared.tabletBorderColor = color
+    }
+    applyTabletAppearance()
+    refreshSettingsFields()
+    setStatus("Tablet appearance updated")
+  }
+
+  @objc private func chooseTabletImage() {
+    guard let settingsWindow else { return }
+
+    let panel = NSOpenPanel()
+    panel.title = "Choose Tablet Background"
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    panel.canChooseFiles = true
+    panel.beginSheetModal(for: settingsWindow) { [weak self] response in
+      guard let self, response == .OK, let url = panel.url else { return }
+      guard ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased()) else {
+        self.setStatus("Choose a PNG or JPEG image")
+        return
+      }
+      guard let image = NSImage(contentsOf: url) else {
+        self.setStatus("Image import failed")
+        return
+      }
+      self.showCropWindow(for: image, shape: self.selectedTabletShape())
+    }
+  }
+
+  @objc private func clearTabletImage() {
+    Preferences.shared.tabletImagePath = ""
+    try? TabletAssetStore.shared.clearBackground()
+    applyTabletAppearance()
+    refreshSettingsFields()
+    setStatus("Tablet image cleared")
+  }
+
+  private func showCropWindow(for image: NSImage, shape: TabletShape) {
+    cropWindow?.close()
+    cropImage = image
+    cropShape = shape
+    cropZoomSlider = nil
+    cropXSlider = nil
+    cropYSlider = nil
+
+    let panel = NSPanel(
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 430),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Crop Tablet Image"
+    panel.isReleasedWhenClosed = false
+    panel.isRestorable = false
+
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 430))
+    let title = NSTextField(labelWithString: "Crop image")
+    title.frame = NSRect(x: 24, y: 386, width: 472, height: 22)
+    title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+    content.addSubview(title)
+
+    let previewFrame = shape == .circle
+      ? NSRect(x: 170, y: 154, width: 180, height: 180)
+      : NSRect(x: 74, y: 190, width: 372, height: 120)
+    let preview = TabletCropPreviewView(frame: previewFrame)
+    preview.image = image
+    preview.shape = shape
+    preview.borderColor = Preferences.shared.tabletBorderColor
+    content.addSubview(preview)
+    cropPreview = preview
+
+    cropZoomSlider = addCropSlider(to: content, title: "Zoom", y: 112, min: 1, max: 3, value: 1)
+    cropXSlider = addCropSlider(to: content, title: "Horizontal", y: 78, min: -1, max: 1, value: 0)
+    cropYSlider = addCropSlider(to: content, title: "Vertical", y: 44, min: -1, max: 1, value: 0)
+
+    let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelCropImage))
+    cancelButton.frame = NSRect(x: 304, y: 10, width: 84, height: 28)
+    cancelButton.bezelStyle = .rounded
+    content.addSubview(cancelButton)
+
+    let useButton = NSButton(title: "Use Image", target: self, action: #selector(confirmCropImage))
+    useButton.frame = NSRect(x: 400, y: 10, width: 96, height: 28)
+    useButton.bezelStyle = .rounded
+    content.addSubview(useButton)
+
+    panel.contentView = content
+    cropWindow = panel
+    panel.center()
+    if let settingsWindow {
+      settingsWindow.beginSheet(panel)
+    } else {
+      panel.makeKeyAndOrderFront(nil)
+    }
+  }
+
+  private func addCropSlider(to content: NSView, title: String, y: CGFloat, min: Double, max: Double, value: Double) -> NSSlider {
+    let label = NSTextField(labelWithString: title)
+    label.frame = NSRect(x: 24, y: y + 4, width: 88, height: 18)
+    content.addSubview(label)
+
+    let slider = NSSlider(value: value, minValue: min, maxValue: max, target: self, action: #selector(cropSliderChanged))
+    slider.frame = NSRect(x: 120, y: y, width: 376, height: 24)
+    content.addSubview(slider)
+    return slider
+  }
+
+  @objc private func cropSliderChanged() {
+    cropPreview?.zoom = CGFloat(cropZoomSlider?.doubleValue ?? 1)
+    cropPreview?.offsetX = CGFloat(cropXSlider?.doubleValue ?? 0)
+    cropPreview?.offsetY = CGFloat(cropYSlider?.doubleValue ?? 0)
+  }
+
+  @objc private func cancelCropImage() {
+    closeCropWindow()
+  }
+
+  @objc private func confirmCropImage() {
+    guard let image = cropImage else {
+      closeCropWindow()
+      return
+    }
+
+    do {
+      let croppedURL = try TabletAssetStore.shared.storeCroppedBackground(
+        image: image,
+        shape: cropShape,
+        zoom: CGFloat(cropZoomSlider?.doubleValue ?? 1),
+        offsetX: CGFloat(cropXSlider?.doubleValue ?? 0),
+        offsetY: CGFloat(cropYSlider?.doubleValue ?? 0)
+      )
+      Preferences.shared.tabletImagePath = croppedURL.path
+      Preferences.shared.tabletShape = cropShape
+      applyTabletAppearance()
+      refreshSettingsFields()
+      setStatus("Tablet image updated")
+    } catch {
+      setStatus("Image import failed")
+    }
+    closeCropWindow()
+  }
+
+  private func closeCropWindow() {
+    guard let cropWindow else { return }
+    if let sheetParent = cropWindow.sheetParent {
+      sheetParent.endSheet(cropWindow)
+    }
+    cropWindow.close()
+    self.cropWindow = nil
+    cropPreview = nil
+    cropZoomSlider = nil
+    cropXSlider = nil
+    cropYSlider = nil
+    cropImage = nil
+  }
+
   @objc private func saveSettings() {
     if let text = tabletTextField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
       Preferences.shared.tabletText = text
-      tabletView.displayText = text
+    }
+
+    Preferences.shared.showTabletText = showTabletTextCheckbox?.state == .on
+    Preferences.shared.tabletShape = selectedTabletShape()
+    if let color = tabletBorderColorWell?.color {
+      Preferences.shared.tabletBorderColor = color
     }
 
     if let apiBase = apiBaseField?.stringValue {
       Preferences.shared.apiBase = apiBase
     }
 
+    applyTabletAppearance()
     setStatus("Settings saved")
     refreshSettingsFields()
   }
@@ -1298,8 +1573,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 }
 
+enum TabletShape: String {
+  case rectangle
+  case circle
+
+  var panelSize: NSSize {
+    switch self {
+    case .rectangle:
+      return NSSize(width: 216, height: 50)
+    case .circle:
+      return NSSize(width: 78, height: 78)
+    }
+  }
+
+  var tabletFrame: NSRect {
+    switch self {
+    case .rectangle:
+      return NSRect(x: 8, y: 14, width: 200, height: 31)
+    case .circle:
+      return NSRect(x: 8, y: 8, width: 62, height: 62)
+    }
+  }
+
+  var cropPixelSize: NSSize {
+    switch self {
+    case .rectangle:
+      return NSSize(width: 1200, height: 186)
+    case .circle:
+      return NSSize(width: 512, height: 512)
+    }
+  }
+}
+
 final class TabletView: NSView {
   var displayText = "$10k/month" {
+    didSet { needsDisplay = true }
+  }
+
+  var shape = TabletShape.rectangle {
+    didSet { needsDisplay = true }
+  }
+
+  var borderColor = NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1) {
+    didSet { needsDisplay = true }
+  }
+
+  var showsDisplayText = true {
+    didSet { needsDisplay = true }
+  }
+
+  var customBackgroundImage: NSImage? {
     didSet { needsDisplay = true }
   }
 
@@ -1328,33 +1651,33 @@ final class TabletView: NSView {
     NSColor.clear.setFill()
     dirtyRect.fill()
 
-    if let generatedAsset {
+    let clipPath = shapePath(in: bounds.insetBy(dx: 2, dy: 2))
+    NSGraphicsContext.saveGraphicsState()
+    clipPath.addClip()
+    if let customBackgroundImage {
+      customBackgroundImage.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: isRecording ? 1 : 0.88)
+    } else if let generatedAsset {
       generatedAsset.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: isRecording ? 1 : 0.78)
     } else {
-      drawFallbackTablet()
+      drawFallbackFill(in: bounds)
     }
+    NSGraphicsContext.restoreGraphicsState()
 
     drawGlow()
-    drawDisplayText()
+    if showsDisplayText {
+      drawDisplayText()
+    }
     drawWaveform()
   }
 
-  private func drawFallbackTablet() {
-    let rect = bounds.insetBy(dx: 6, dy: 6)
-    let path = NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16)
+  private func drawFallbackFill(in rect: NSRect) {
     NSColor(calibratedRed: 0.02, green: 0.03, blue: 0.07, alpha: 0.92).setFill()
-    path.fill()
-    NSColor(calibratedRed: 0.18, green: 0.87, blue: 1, alpha: 0.75).setStroke()
-    path.lineWidth = 1.5
-    path.stroke()
+    rect.fill()
   }
 
   private func drawGlow() {
-    let stroke = NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 6), xRadius: 13, yRadius: 13)
-    (isRecording
-      ? NSColor(calibratedRed: 0.20, green: 0.95, blue: 1, alpha: 0.55)
-      : NSColor(calibratedRed: 0.55, green: 0.32, blue: 1, alpha: 0.34)
-    ).setStroke()
+    let stroke = shapePath(in: bounds.insetBy(dx: 3, dy: 3))
+    borderColor.withAlphaComponent(isRecording ? 0.72 : 0.46).setStroke()
     stroke.lineWidth = isRecording ? 2 : 1
     stroke.stroke()
   }
@@ -1377,13 +1700,14 @@ final class TabletView: NSView {
       .shadow: shadow,
     ]
 
-    let textRect = NSRect(x: 24, y: bounds.midY - 10, width: bounds.width - 48, height: 22)
+    let horizontalInset: CGFloat = shape == .circle ? 10 : 24
+    let textRect = NSRect(x: horizontalInset, y: bounds.midY - 10, width: bounds.width - (horizontalInset * 2), height: 22)
     displayText.draw(in: textRect, withAttributes: attrs)
   }
 
   private func drawWaveform() {
     let barCount = 12
-    let totalWidth: CGFloat = 78
+    let totalWidth: CGFloat = shape == .circle ? 38 : 78
     let startX = bounds.midX - (totalWidth / 2)
     let baseY: CGFloat = 7
     let phase = CGFloat(Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10))
@@ -1397,6 +1721,81 @@ final class TabletView: NSView {
       let path = NSBezierPath(roundedRect: rect, xRadius: 1.2, yRadius: 1.2)
       NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: isRecording ? 0.95 : 0.34).setFill()
       path.fill()
+    }
+  }
+
+  private func shapePath(in rect: NSRect) -> NSBezierPath {
+    switch shape {
+    case .rectangle:
+      return NSBezierPath(roundedRect: rect, xRadius: min(16, rect.height / 2), yRadius: min(16, rect.height / 2))
+    case .circle:
+      let diameter = min(rect.width, rect.height)
+      let circleRect = NSRect(x: rect.midX - diameter / 2, y: rect.midY - diameter / 2, width: diameter, height: diameter)
+      return NSBezierPath(ovalIn: circleRect)
+    }
+  }
+}
+
+final class TabletCropPreviewView: NSView {
+  var image: NSImage? {
+    didSet { needsDisplay = true }
+  }
+
+  var shape = TabletShape.rectangle {
+    didSet { needsDisplay = true }
+  }
+
+  var borderColor = NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1) {
+    didSet { needsDisplay = true }
+  }
+
+  var zoom: CGFloat = 1 {
+    didSet { needsDisplay = true }
+  }
+
+  var offsetX: CGFloat = 0 {
+    didSet { needsDisplay = true }
+  }
+
+  var offsetY: CGFloat = 0 {
+    didSet { needsDisplay = true }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    NSColor(calibratedWhite: 0.04, alpha: 1).setFill()
+    dirtyRect.fill()
+
+    let path = shapePath(in: bounds.insetBy(dx: 2, dy: 2))
+    NSGraphicsContext.saveGraphicsState()
+    path.addClip()
+    NSColor.black.setFill()
+    bounds.fill()
+
+    if let image {
+      let sourceRect = TabletAssetStore.cropRect(
+        for: image.size,
+        targetAspect: bounds.width / bounds.height,
+        zoom: zoom,
+        offsetX: offsetX,
+        offsetY: offsetY
+      )
+      image.draw(in: bounds, from: sourceRect, operation: .sourceOver, fraction: 1)
+    }
+    NSGraphicsContext.restoreGraphicsState()
+
+    borderColor.withAlphaComponent(0.8).setStroke()
+    path.lineWidth = 2
+    path.stroke()
+  }
+
+  private func shapePath(in rect: NSRect) -> NSBezierPath {
+    switch shape {
+    case .rectangle:
+      return NSBezierPath(roundedRect: rect, xRadius: 18, yRadius: 18)
+    case .circle:
+      let diameter = min(rect.width, rect.height)
+      let circleRect = NSRect(x: rect.midX - diameter / 2, y: rect.midY - diameter / 2, width: diameter, height: diameter)
+      return NSBezierPath(ovalIn: circleRect)
     }
   }
 }
@@ -1477,6 +1876,10 @@ final class Preferences {
 
   private let defaults = UserDefaults.standard
   private let tabletTextKey = "tabletText"
+  private let showTabletTextKey = "showTabletText"
+  private let tabletImagePathKey = "tabletImagePath"
+  private let tabletShapeKey = "tabletShape"
+  private let tabletBorderColorKey = "tabletBorderColor"
   private let shortcutIDKey = "shortcutID"
   private let shortcutKeyCodeKey = "shortcutKeyCode"
   private let shortcutModifiersKey = "shortcutModifiers"
@@ -1490,6 +1893,42 @@ final class Preferences {
     }
     set {
       defaults.set(newValue, forKey: tabletTextKey)
+    }
+  }
+
+  var showTabletText: Bool {
+    get {
+      defaults.object(forKey: showTabletTextKey) == nil ? true : defaults.bool(forKey: showTabletTextKey)
+    }
+    set {
+      defaults.set(newValue, forKey: showTabletTextKey)
+    }
+  }
+
+  var tabletImagePath: String {
+    get {
+      defaults.string(forKey: tabletImagePathKey) ?? ""
+    }
+    set {
+      defaults.set(newValue, forKey: tabletImagePathKey)
+    }
+  }
+
+  var tabletShape: TabletShape {
+    get {
+      TabletShape(rawValue: defaults.string(forKey: tabletShapeKey) ?? "") ?? .rectangle
+    }
+    set {
+      defaults.set(newValue.rawValue, forKey: tabletShapeKey)
+    }
+  }
+
+  var tabletBorderColor: NSColor {
+    get {
+      colorFromHex(defaults.string(forKey: tabletBorderColorKey) ?? "#2EEAFF")
+    }
+    set {
+      defaults.set(hexFromColor(newValue), forKey: tabletBorderColorKey)
     }
   }
 
@@ -1657,6 +2096,26 @@ private func keyLabel(_ keyCode: UInt32, fallbackLabel: String? = nil) -> String
   return "Key \(keyCode)"
 }
 
+private func colorFromHex(_ value: String) -> NSColor {
+  let cleaned = value.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespacesAndNewlines))
+  guard cleaned.count == 6, let intValue = Int(cleaned, radix: 16) else {
+    return NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1)
+  }
+
+  let red = CGFloat((intValue >> 16) & 0xFF) / 255
+  let green = CGFloat((intValue >> 8) & 0xFF) / 255
+  let blue = CGFloat(intValue & 0xFF) / 255
+  return NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1)
+}
+
+private func hexFromColor(_ color: NSColor) -> String {
+  let converted = color.usingColorSpace(.deviceRGB) ?? color
+  let red = Int(round(converted.redComponent * 255))
+  let green = Int(round(converted.greenComponent * 255))
+  let blue = Int(round(converted.blueComponent * 255))
+  return String(format: "#%02X%02X%02X", red, green, blue)
+}
+
 struct TranscriptEntry: Codable {
   let id: String
   let createdAt: Date
@@ -1697,6 +2156,119 @@ final class TranscriptStore {
       .appendingPathExtension("m4a")
     try FileManager.default.copyItem(at: sourceURL, to: destination)
     return destination
+  }
+}
+
+final class TabletAssetStore {
+  static let shared = TabletAssetStore()
+
+  private let supportURL: URL
+  private let backgroundURL: URL
+
+  private init() {
+    supportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("Hushly", isDirectory: true)
+    try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
+    backgroundURL = supportURL.appendingPathComponent("tablet-background.png")
+  }
+
+  func storeCroppedBackground(
+    image: NSImage,
+    shape: TabletShape,
+    zoom: CGFloat,
+    offsetX: CGFloat,
+    offsetY: CGFloat
+  ) throws -> URL {
+    let size = shape.cropPixelSize
+    let rep = try croppedPNGRepresentation(
+      from: image,
+      width: Int(size.width),
+      height: Int(size.height),
+      zoom: zoom,
+      offsetX: offsetX,
+      offsetY: offsetY
+    )
+    try rep.write(to: backgroundURL, options: [.atomic])
+    return backgroundURL
+  }
+
+  func clearBackground() throws {
+    if FileManager.default.fileExists(atPath: backgroundURL.path) {
+      try FileManager.default.removeItem(at: backgroundURL)
+    }
+  }
+
+  private func croppedPNGRepresentation(
+    from image: NSImage,
+    width: Int,
+    height: Int,
+    zoom: CGFloat,
+    offsetX: CGFloat,
+    offsetY: CGFloat
+  ) throws -> Data {
+    guard
+      let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      )
+    else {
+      throw HushlyError.api("Could not create image canvas")
+    }
+
+    let targetRect = NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+    let sourceRect = Self.cropRect(
+      for: image.size,
+      targetAspect: targetRect.width / targetRect.height,
+      zoom: zoom,
+      offsetX: offsetX,
+      offsetY: offsetY
+    )
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    NSColor.clear.setFill()
+    targetRect.fill()
+    image.draw(in: targetRect, from: sourceRect, operation: .sourceOver, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+
+    guard let data = bitmap.representation(using: .png, properties: [:]) else {
+      throw HushlyError.api("Could not encode image")
+    }
+    return data
+  }
+
+  static func cropRect(for imageSize: NSSize, targetAspect: CGFloat, zoom: CGFloat, offsetX: CGFloat, offsetY: CGFloat) -> NSRect {
+    guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+    let sourceAspect = imageSize.width / imageSize.height
+    let cleanZoom = max(1, min(3, zoom))
+    let cleanOffsetX = max(-1, min(1, offsetX))
+    let cleanOffsetY = max(-1, min(1, offsetY))
+    let baseSize: NSSize
+
+    if sourceAspect > targetAspect {
+      let width = imageSize.height * targetAspect
+      baseSize = NSSize(width: width, height: imageSize.height)
+    } else {
+      let height = imageSize.width / targetAspect
+      baseSize = NSSize(width: imageSize.width, height: height)
+    }
+
+    let croppedSize = NSSize(width: baseSize.width / cleanZoom, height: baseSize.height / cleanZoom)
+    let maxX = max(0, (imageSize.width - croppedSize.width) / 2)
+    let maxY = max(0, (imageSize.height - croppedSize.height) / 2)
+    let origin = NSPoint(
+      x: ((imageSize.width - croppedSize.width) / 2) + (cleanOffsetX * maxX),
+      y: ((imageSize.height - croppedSize.height) / 2) + (cleanOffsetY * maxY)
+    )
+    return NSRect(origin: origin, size: croppedSize)
   }
 }
 
