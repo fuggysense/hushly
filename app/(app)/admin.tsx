@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { TranscriptCard } from '@/components/TranscriptCard';
 import { C } from '@/lib/tokens';
 
@@ -35,7 +36,6 @@ export default function Admin() {
 
   const callAdmin = async (body: Record<string, unknown>) => {
     setStatus('Loading...');
-    setCreatedKey('');
     const res = await fetch('/admin-keys', {
       method: 'POST',
       headers: {
@@ -61,6 +61,7 @@ export default function Admin() {
 
   const createKey = async () => {
     try {
+      setCreatedKey('');
       const json = await callAdmin({ action: 'create', label, tag });
       setCreatedKey(json.key ?? '');
       setLabel('');
@@ -68,6 +69,12 @@ export default function Admin() {
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const copyCreatedKey = async () => {
+    if (!createdKey) return;
+    await Clipboard.setStringAsync(createdKey);
+    setStatus('API key copied');
   };
 
   const revokeKey = async (id: string) => {
@@ -131,8 +138,20 @@ export default function Admin() {
           <Pressable style={styles.primary} onPress={createKey}>
             <Text style={styles.primaryText}>Create</Text>
           </Pressable>
-          {createdKey ? <Text style={styles.keyText} selectable>{createdKey}</Text> : null}
         </TranscriptCard>
+
+        {createdKey ? (
+          <TranscriptCard style={styles.createdCard}>
+            <Text style={styles.eyebrow}>New API key</Text>
+            <Text style={styles.line}>Copy it now. The full key is shown only once.</Text>
+            <Text style={styles.keyText} selectable>
+              {createdKey}
+            </Text>
+            <Pressable style={styles.primary} onPress={copyCreatedKey}>
+              <Text style={styles.primaryText}>Copy API key</Text>
+            </Pressable>
+          </TranscriptCard>
+        ) : null}
 
         <View style={styles.actions}>
           <Pressable style={styles.secondary} onPress={listKeys}>
@@ -199,6 +218,7 @@ const styles = StyleSheet.create({
   title: { color: C.textPrimary, fontFamily: 'Inter-Light', fontSize: 20 },
   content: { padding: 16, gap: 12 },
   card: { padding: 16, gap: 10 },
+  createdCard: { padding: 16, gap: 10, borderColor: C.accent },
   eyebrow: {
     color: C.textTertiary,
     fontFamily: 'JetBrainsMono-Regular',
