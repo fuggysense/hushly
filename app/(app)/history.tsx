@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Link } from 'expo-router';
+import { TranscriptCard } from '@/components/TranscriptCard';
 import { listTranscripts, deleteTranscript, retryTranscript } from '@/lib/api';
 import { C } from '@/lib/tokens';
 
@@ -116,7 +117,7 @@ export default function History() {
           contentContainerStyle={{ padding: 16, gap: 12 }}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={C.textTertiary} />}
           renderItem={({ item }) => (
-            <View style={styles.row}>
+            <TranscriptCard style={styles.row}>
               <Text style={styles.timestamp}>
                 {formatDate(item.created_at)}
                 {item.duration_ms ? ` · ${(item.duration_ms / 1000).toFixed(1)}s` : ''}
@@ -135,20 +136,20 @@ export default function History() {
                   disabled={busyId === item.id || !item.audio_path}
                 >
                   {busyId === item.id ? (
-                    <ActivityIndicator size="small" color={C.textPrimary} />
+                    <ActivityIndicator size="small" color={C.textSecondary} />
                   ) : (
                     <Text style={styles.actionText}>Retry</Text>
                   )}
                 </Pressable>
                 <Pressable
-                  style={[styles.actionBtn, styles.actionDelete]}
+                  style={styles.actionBtn}
                   onPress={() => onDelete(item)}
                   disabled={busyId === item.id}
                 >
-                  <Text style={styles.actionText}>Delete</Text>
+                  <Text style={[styles.actionText, styles.actionDeleteText]}>Delete</Text>
                 </Pressable>
               </View>
-            </View>
+            </TranscriptCard>
           )}
         />
       )}
@@ -180,9 +181,7 @@ const styles = StyleSheet.create({
   emptyText: { color: C.textTertiary, fontFamily: 'Inter-Regular', fontSize: 16 },
   emptyLink: { color: C.accent, fontFamily: 'Inter-Regular', fontSize: 14 },
   row: {
-    backgroundColor: C.surface,
-    borderRadius: 14,
-    padding: 14,
+    padding: 16,
     gap: 8,
   },
   timestamp: {
@@ -198,10 +197,11 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 9,
     borderRadius: 8,
-    backgroundColor: C.elevated,
+    borderWidth: 1,
+    borderColor: C.hairline,
     alignItems: 'center',
   },
   actionDisabled: { opacity: 0.4 },
-  actionDelete: { backgroundColor: C.accentSoft },
-  actionText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 13 },
+  actionText: { color: C.textSecondary, fontFamily: 'Inter-Medium', fontSize: 13 },
+  actionDeleteText: { color: C.accent },
 });
