@@ -26,44 +26,49 @@ export default function SignUp() {
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.title}>Create your hushly account</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="you@example.com"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="email-address"
-        value={email}
-        onChangeText={setEmail}
-        placeholderTextColor={C.textMuted}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="password (8+ chars)"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-        placeholderTextColor={C.textMuted}
-      />
-      <Pressable style={styles.btn} onPress={submit} disabled={busy}>
-        {busy ? <ActivityIndicator color={C.textPrimary} /> : <Text style={styles.btnText}>Sign up</Text>}
-      </Pressable>
-      <Link href="/(auth)/sign-in" style={styles.link}>
-        Already have an account? Sign in
-      </Link>
+      <View style={styles.panel}>
+        <Text style={styles.title}>Create your hushly account</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="you@example.com"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          value={email}
+          onChangeText={setEmail}
+          placeholderTextColor={C.textMuted}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="password (8+ chars)"
+          secureTextEntry
+          value={password}
+          onChangeText={setPassword}
+          placeholderTextColor={C.textMuted}
+        />
+        <Pressable style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]} onPress={submit} disabled={busy}>
+          {busy ? <ActivityIndicator color={C.textPrimary} /> : <Text style={styles.btnText}>Sign up</Text>}
+        </Pressable>
+        <Link href="/(auth)/sign-in" style={styles.link}>
+          Already have an account? Sign in
+        </Link>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, justifyContent: 'center', padding: 24, gap: 12, backgroundColor: C.bg },
-  title: { color: C.textPrimary, fontFamily: 'Inter-Light', fontSize: 28, marginBottom: 12 },
+  wrap: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: C.bg },
+  panel: { width: '100%', maxWidth: 420, alignSelf: 'center', gap: 12 },
+  title: { color: C.textPrimary, fontFamily: 'Inter-Light', fontSize: 32, marginBottom: 12 },
   input: {
     backgroundColor: C.elevated,
     color: C.textPrimary,
     fontFamily: 'Inter-Regular',
     padding: 14,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.hairline,
     fontSize: 16,
   },
   btn: {
@@ -73,6 +78,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
+  btnPressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
   btnText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 16 },
   link: { color: C.accent, fontFamily: 'Inter-Regular', textAlign: 'center', marginTop: 16 },
 });
