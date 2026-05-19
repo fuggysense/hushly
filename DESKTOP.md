@@ -10,9 +10,16 @@ scripts/build-macos-app.sh
 open dist/macos/Hushly.app
 ```
 
+Keep the local web server running while using this local build:
+
+```bash
+CI=1 npx expo start --web --port 8083
+```
+
 What it is:
 - 104 KB `.app` bundle on Apple Silicon because it uses system AppKit/WebKit instead of Electron.
-- Menu-bar/floating window app that loads `https://hushly-six.vercel.app`.
+- Menu-bar window app that loads the local Expo dev server at `http://localhost:8083`.
+- Normal macOS window level; it can be moved by dragging the background/title area.
 - Requests microphone access through the native app bundle.
 - `Control + Option + Space` brings the Hushly window forward.
 - Output still follows the current Hushly behavior: clean text is copied, then you paste where needed.

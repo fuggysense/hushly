@@ -2,9 +2,18 @@ import Cocoa
 import Carbon.HIToolbox
 import WebKit
 
-private let appURL = URL(string: "https://hushly-six.vercel.app")!
+private let appURL = URL(string: "http://localhost:8083")!
 
 @main
+struct HushlyLiteApp {
+  static func main() {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.run()
+  }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUIDelegate {
   private var window: NSWindow!
   private var statusItem: NSStatusItem!
@@ -60,8 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
     window.title = "hushly"
     window.contentView = webView
     window.delegate = self
-    window.level = .floating
+    window.level = .normal
     window.isReleasedWhenClosed = false
+    window.isMovableByWindowBackground = true
     window.titlebarAppearsTransparent = true
     window.standardWindowButton(.zoomButton)?.isHidden = true
   }
