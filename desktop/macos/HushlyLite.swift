@@ -16,42 +16,87 @@ struct HushlyLiteApp {
   }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
   private var tabletPanel: NSPanel!
   private var tabletView: TabletView!
   private var statusLabel: NSTextField!
   private var statusItem: NSStatusItem!
   private var settingsWindow: NSWindow?
   private var tabletTextField: NSTextField?
-  private var shortcutPopup: NSPopUpButton?
+  private var shortcutButton: NSButton?
+  private var shortcutCaptureWindow: NSPanel?
+  private var shortcutCaptureMonitor: Any?
+  private var shortcutCaptureHintLabel: NSTextField?
   private var apiBaseField: NSTextField?
+  private var mainStatusLabel: NSTextField?
+  private var accessibilityStatusLabel: NSTextField?
+  private var historyTable: NSTableView?
+  private var historyItems: [TranscriptEntry] = []
   private var hotKeyRef: EventHotKeyRef?
+  private var escapeHotKeyRef: EventHotKeyRef?
   private var eventHandlerRef: EventHandlerRef?
+  private var escapeLocalMonitor: Any?
+  private var escapeGlobalMonitor: Any?
   private var recorder: AVAudioRecorder?
   private var recordingURL: URL?
   private var pasteTargetApp: NSRunningApplication?
+  private var lastExternalApp: NSRunningApplication?
   private var animationTimer: Timer?
+  private var smoothedAudioLevel: CGFloat = 0
   private var isRecording = false
+  private lazy var popSound: NSSound? = {
+    let sound =
+      NSSound(contentsOfFile: "/System/Library/Sounds/Pop.aiff", byReference: true)
+      ?? NSSound(named: NSSound.Name("Pop"))
+    sound?.volume = 0.75
+    return sound
+  }()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     buildStatusItem()
     buildTabletPanel()
+    historyItems = TranscriptStore.shared.load()
+    observeActiveApps()
     installHotKeyHandler()
     registerHotKey()
-    showTabletPanel(positionAtBottom: true)
+    showSettings()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+      self.refreshSettingsFields()
+      self.setReadyStatus()
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
   }
 
+  func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+    false
+  }
+
+  func applicationDidBecomeActive(_ notification: Notification) {
+    refreshAccessibilityStatus()
+    if !isRecording {
+      setReadyStatus()
+    }
+  }
+
   func windowWillClose(_ notification: Notification) {
     if notification.object as? NSWindow === settingsWindow {
       settingsWindow = nil
       tabletTextField = nil
-      shortcutPopup = nil
+      shortcutButton = nil
       apiBaseField = nil
+      mainStatusLabel = nil
+      accessibilityStatusLabel = nil
+    } else if notification.object as? NSWindow === shortcutCaptureWindow {
+      removeShortcutCaptureMonitor()
+      shortcutCaptureWindow = nil
+      shortcutCaptureHintLabel = nil
+      registerHotKey()
+      refreshSettingsFields()
+      setReadyStatus()
     }
   }
 
@@ -60,9 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     statusItem.button?.title = "hushly"
 
     let menu = NSMenu()
+    menu.addItem(menuItem("Open Hushly", action: #selector(showSettings), key: ""))
     menu.addItem(menuItem("Start / Stop Dictation", action: #selector(toggleDictation), key: "d"))
-    menu.addItem(menuItem("Show Tablet", action: #selector(showTabletFromMenu), key: ""))
-    menu.addItem(menuItem("Settings", action: #selector(showSettings), key: ","))
     menu.addItem(menuItem("Open Accessibility Settings", action: #selector(openAccessibilitySettings), key: ""))
     menu.addItem(.separator())
     menu.addItem(menuItem("Quit Hushly", action: #selector(NSApplication.terminate(_:)), key: "q"))
@@ -75,11 +119,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     return item
   }
 
+  private func observeActiveApps() {
+    if let app = currentExternalApp() {
+      lastExternalApp = app
+    }
+
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self,
+      selector: #selector(activeAppChanged(_:)),
+      name: NSWorkspace.didActivateApplicationNotification,
+      object: nil
+    )
+  }
+
+  @objc private func activeAppChanged(_ notification: Notification) {
+    guard
+      let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+      app.bundleIdentifier != Bundle.main.bundleIdentifier
+    else {
+      return
+    }
+    lastExternalApp = app
+  }
+
+  private func currentExternalApp() -> NSRunningApplication? {
+    let app = NSWorkspace.shared.frontmostApplication
+    return app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app
+  }
+
   private func buildTabletPanel() {
-    let contentRect = NSRect(x: 0, y: 0, width: 460, height: 214)
+    let contentRect = NSRect(x: 0, y: 0, width: 216, height: 50)
     tabletPanel = NSPanel(
       contentRect: contentRect,
-      styleMask: [.titled, .fullSizeContentView],
+      styleMask: [.titled, .nonactivatingPanel, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
@@ -93,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     tabletPanel.isOpaque = false
     tabletPanel.hasShadow = true
     tabletPanel.level = .floating
+    tabletPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     tabletPanel.delegate = self
     tabletPanel.standardWindowButton(.closeButton)?.isHidden = true
     tabletPanel.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -101,30 +174,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let content = NSView(frame: contentRect)
     content.wantsLayer = true
     content.layer?.backgroundColor = NSColor(calibratedWhite: 0.02, alpha: 0.94).cgColor
-    content.layer?.cornerRadius = 24
+    content.layer?.cornerRadius = 13
     content.layer?.masksToBounds = true
 
-    tabletView = TabletView(frame: NSRect(x: 18, y: 46, width: 424, height: 150))
+    tabletView = TabletView(frame: NSRect(x: 8, y: 14, width: 200, height: 31))
     tabletView.displayText = Preferences.shared.tabletText
     content.addSubview(tabletView)
 
     statusLabel = NSTextField(labelWithString: "Ready")
-    statusLabel.frame = NSRect(x: 26, y: 20, width: 232, height: 18)
+    statusLabel.frame = NSRect(x: 12, y: 3, width: 192, height: 10)
     statusLabel.textColor = NSColor.white.withAlphaComponent(0.72)
-    statusLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    statusLabel.font = NSFont.systemFont(ofSize: 8, weight: .medium)
     statusLabel.lineBreakMode = .byTruncatingTail
     statusLabel.maximumNumberOfLines = 1
     content.addSubview(statusLabel)
-
-    let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
-    dictateButton.frame = NSRect(x: 268, y: 14, width: 84, height: 28)
-    dictateButton.bezelStyle = .rounded
-    content.addSubview(dictateButton)
-
-    let settingsButton = NSButton(title: "Settings", target: self, action: #selector(showSettings))
-    settingsButton.frame = NSRect(x: 358, y: 14, width: 84, height: 28)
-    settingsButton.bezelStyle = .rounded
-    content.addSubview(settingsButton)
 
     tabletPanel.contentView = content
   }
@@ -146,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let size = tabletPanel.frame.size
     let origin = NSPoint(
       x: visible.midX - (size.width / 2),
-      y: visible.minY + 36
+      y: visible.minY + 18
     )
     tabletPanel.setFrameOrigin(origin)
   }
@@ -162,13 +225,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private func startRecording() {
     guard !isRecording else { return }
 
-    pasteTargetApp = NSWorkspace.shared.frontmostApplication
+    pasteTargetApp = currentExternalApp() ?? lastExternalApp
     showTabletPanel(positionAtBottom: true)
+    refreshAccessibilityStatus()
     requestMicrophoneAccess { [weak self] granted in
       guard let self else { return }
       DispatchQueue.main.async {
         guard granted else {
           self.setStatus("Microphone permission is needed.")
+          self.hideTablet(after: 1.4)
           return
         }
         self.beginRecorder()
@@ -188,14 +253,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
       ]
       let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+      recorder.isMeteringEnabled = true
       recorder.prepareToRecord()
       recorder.record()
 
       self.recorder = recorder
       self.recordingURL = fileURL
       self.isRecording = true
+      self.smoothedAudioLevel = 0
       self.tabletView.isRecording = true
+      self.tabletView.audioLevel = 0
       self.tabletView.displayText = Preferences.shared.tabletText
+      registerEscapeHotKey()
+      installEscapeMonitors()
       startGlowAnimation()
       playStartSound()
       setStatus("Listening")
@@ -212,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     recordingURL = nil
     isRecording = false
     tabletView.isRecording = false
+    tabletView.audioLevel = 0
+    unregisterEscapeHotKey()
+    removeEscapeMonitors()
     stopGlowAnimation()
     playStopSound()
     setStatus("Transcribing")
@@ -226,6 +299,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
+  private func cancelRecordingForRetry() {
+    guard isRecording else { return }
+    let fileURL = recordingURL
+    recorder?.stop()
+    recorder = nil
+    recordingURL = nil
+    isRecording = false
+    tabletView.isRecording = false
+    tabletView.audioLevel = 0
+    unregisterEscapeHotKey()
+    removeEscapeMonitors()
+    stopGlowAnimation()
+    playStopSound()
+
+    guard let fileURL else {
+      setStatus("No recording found.")
+      hideTablet(after: 1.2)
+      return
+    }
+
+    do {
+      let savedURL = try TranscriptStore.shared.storeAudio(fileURL)
+      let entry = TranscriptEntry(
+        id: UUID().uuidString,
+        createdAt: Date(),
+        rawText: "",
+        cleanedText: "",
+        audioPath: savedURL.path,
+        status: "Saved for retry"
+      )
+      historyItems.insert(entry, at: 0)
+      TranscriptStore.shared.save(historyItems)
+      historyTable?.reloadData()
+      setStatus("Saved for retry")
+    } catch {
+      setStatus("Cancel save failed")
+    }
+
+    try? FileManager.default.removeItem(at: fileURL)
+    hideTablet(after: 1.2)
+  }
+
   private func processRecording(_ fileURL: URL) async {
     defer { try? FileManager.default.removeItem(at: fileURL) }
 
@@ -233,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       let transcript = try await transcribe(fileURL: fileURL)
       guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         setStatus("No speech detected.")
+        hideTablet(after: 1.2)
         return
       }
 
@@ -248,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       paste(finalText)
     } catch {
       setStatus(error.localizedDescription)
+      hideTablet(after: 2.0)
     }
   }
 
@@ -297,11 +414,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     NSPasteboard.general.setString(text, forType: .string)
 
     guard ensureAccessibilityPermission(prompt: true) else {
-      setStatus("Clipboard ready. Access needed.")
+      refreshAccessibilityStatus()
+      setStatus("Clipboard ready. Enable auto-paste.")
+      hideTablet(after: 2.0)
       return
     }
 
-    pasteTargetApp?.activate(options: [.activateAllWindows])
+    refreshAccessibilityStatus()
+    guard let target = pasteTargetApp, target.bundleIdentifier != Bundle.main.bundleIdentifier else {
+      setStatus("Clipboard ready. Focus target first.")
+      hideTablet(after: 2.0)
+      return
+    }
+
+    target.activate(options: [.activateAllWindows])
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
       let source = CGEventSource(stateID: .combinedSessionState)
       let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true)
@@ -311,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       keyDown?.post(tap: .cghidEventTap)
       keyUp?.post(tap: .cghidEventTap)
       self.setStatus("Pasted")
+      self.hideTablet(after: 0.9)
     }
   }
 
@@ -345,61 +472,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     guard let window = settingsWindow else { return }
     tabletTextField?.stringValue = Preferences.shared.tabletText
     apiBaseField?.stringValue = Preferences.shared.apiBase
-    selectCurrentShortcut()
+    refreshSettingsFields()
+    if !isRecording {
+      setReadyStatus()
+    }
     NSApp.activate(ignoringOtherApps: true)
     window.center()
     window.makeKeyAndOrderFront(nil)
+    DispatchQueue.main.async {
+      self.refreshSettingsFields()
+      if !self.isRecording {
+        self.setReadyStatus()
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+      self.refreshSettingsFields()
+      if !self.isRecording {
+        self.setReadyStatus()
+      }
+    }
   }
 
   private func buildSettingsWindow() {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 430, height: 250),
+      contentRect: NSRect(x: 0, y: 0, width: 430, height: 282),
       styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false
     )
-    window.title = "Hushly Settings"
+    window.title = "Hushly"
     window.isReleasedWhenClosed = false
+    window.isRestorable = false
     window.delegate = self
 
-    let content = NSView(frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 430, height: 250))
+    let content = NSView(frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 430, height: 282))
 
     let textLabel = NSTextField(labelWithString: "Tablet text")
-    textLabel.frame = NSRect(x: 24, y: 188, width: 110, height: 18)
+    textLabel.frame = NSRect(x: 24, y: 220, width: 110, height: 18)
     content.addSubview(textLabel)
 
     let textField = NSTextField(string: Preferences.shared.tabletText)
-    textField.frame = NSRect(x: 146, y: 182, width: 248, height: 28)
+    textField.frame = NSRect(x: 146, y: 214, width: 248, height: 28)
     content.addSubview(textField)
     tabletTextField = textField
 
     let shortcutLabel = NSTextField(labelWithString: "Shortcut")
-    shortcutLabel.frame = NSRect(x: 24, y: 140, width: 110, height: 18)
+    shortcutLabel.frame = NSRect(x: 24, y: 172, width: 110, height: 18)
     content.addSubview(shortcutLabel)
 
-    let popup = NSPopUpButton(frame: NSRect(x: 146, y: 134, width: 248, height: 30), pullsDown: false)
-    ShortcutCatalog.options.forEach { option in
-      popup.addItem(withTitle: option.title)
-      popup.lastItem?.representedObject = option.id
-    }
-    content.addSubview(popup)
-    shortcutPopup = popup
-    selectCurrentShortcut()
+    let shortcutButton = NSButton(title: Preferences.shared.shortcut.title, target: self, action: #selector(beginShortcutCapture))
+    shortcutButton.frame = NSRect(x: 146, y: 166, width: 248, height: 30)
+    shortcutButton.bezelStyle = .rounded
+    content.addSubview(shortcutButton)
+    self.shortcutButton = shortcutButton
 
     let apiLabel = NSTextField(labelWithString: "API base")
-    apiLabel.frame = NSRect(x: 24, y: 92, width: 110, height: 18)
+    apiLabel.frame = NSRect(x: 24, y: 124, width: 110, height: 18)
     content.addSubview(apiLabel)
 
     let apiField = NSTextField(string: Preferences.shared.apiBase)
-    apiField.frame = NSRect(x: 146, y: 86, width: 248, height: 28)
+    apiField.frame = NSRect(x: 146, y: 118, width: 248, height: 28)
     content.addSubview(apiField)
     apiBaseField = apiField
 
-    let hint = NSTextField(labelWithString: "Auto-paste requires macOS Accessibility permission.")
-    hint.frame = NSRect(x: 24, y: 52, width: 370, height: 18)
-    hint.textColor = NSColor.secondaryLabelColor
-    hint.font = NSFont.systemFont(ofSize: 11)
-    content.addSubview(hint)
+    let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
+    accessStatus.frame = NSRect(x: 24, y: 82, width: 370, height: 18)
+    accessStatus.textColor = NSColor.secondaryLabelColor
+    accessStatus.font = NSFont.systemFont(ofSize: 11)
+    accessStatus.lineBreakMode = .byTruncatingTail
+    accessStatus.maximumNumberOfLines = 1
+    content.addSubview(accessStatus)
+    accessibilityStatusLabel = accessStatus
+
+    let mainStatus = NSTextField(labelWithString: "Ready: \(Preferences.shared.shortcut.title)")
+    mainStatus.frame = NSRect(x: 24, y: 50, width: 370, height: 18)
+    mainStatus.textColor = NSColor.secondaryLabelColor
+    mainStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    mainStatus.lineBreakMode = .byTruncatingTail
+    mainStatus.maximumNumberOfLines = 1
+    content.addSubview(mainStatus)
+    mainStatusLabel = mainStatus
+
+    let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
+    dictateButton.frame = NSRect(x: 190, y: 16, width: 94, height: 30)
+    dictateButton.bezelStyle = .rounded
+    content.addSubview(dictateButton)
 
     let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
     saveButton.frame = NSRect(x: 300, y: 16, width: 94, height: 30)
@@ -408,13 +565,192 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     window.contentView = content
     settingsWindow = window
+    refreshSettingsFields()
   }
 
-  private func selectCurrentShortcut() {
-    guard let popup = shortcutPopup else { return }
-    if let item = popup.itemArray.first(where: { $0.representedObject as? String == Preferences.shared.shortcutID }) {
-      popup.select(item)
+  private func refreshSettingsFields() {
+    tabletTextField?.stringValue = Preferences.shared.tabletText
+    apiBaseField?.stringValue = Preferences.shared.apiBase
+    shortcutButton?.title = Preferences.shared.shortcut.title
+    refreshAccessibilityStatus()
+  }
+
+  @objc private func beginShortcutCapture() {
+    showShortcutCaptureWindow()
+    setStatus("Press your shortcut")
+  }
+
+  private func showShortcutCaptureWindow() {
+    removeShortcutCaptureMonitor()
+    if let shortcutCaptureWindow {
+      shortcutCaptureWindow.delegate = nil
+      shortcutCaptureWindow.close()
+      self.shortcutCaptureWindow = nil
+      shortcutCaptureHintLabel = nil
     }
+    unregisterHotKey()
+
+    let panel = NSPanel(
+      contentRect: NSRect(x: 0, y: 0, width: 340, height: 132),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Set Shortcut"
+    panel.isReleasedWhenClosed = false
+    panel.isRestorable = false
+    panel.delegate = self
+
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 132))
+    let title = NSTextField(labelWithString: "Press the shortcut you want")
+    title.frame = NSRect(x: 28, y: 78, width: 284, height: 22)
+    title.alignment = .center
+    title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+    content.addSubview(title)
+
+    let hint = NSTextField(labelWithString: "Use a modifier with a key, or press F1-F20. Esc cancels.")
+    hint.frame = NSRect(x: 28, y: 50, width: 284, height: 18)
+    hint.alignment = .center
+    hint.textColor = .secondaryLabelColor
+    hint.font = NSFont.systemFont(ofSize: 11)
+    content.addSubview(hint)
+    shortcutCaptureHintLabel = hint
+
+    let captureView = ShortcutCaptureView(frame: content.bounds)
+    captureView.onShortcut = { [weak self] shortcut in
+      guard let self else { return }
+      self.acceptShortcutCapture(shortcut)
+    }
+    captureView.onCancel = { [weak self] in
+      guard let self else { return }
+      self.cancelShortcutCapture()
+    }
+    content.addSubview(captureView, positioned: .below, relativeTo: title)
+
+    panel.contentView = content
+    shortcutCaptureWindow = panel
+    NSApp.activate(ignoringOtherApps: true)
+    panel.center()
+    panel.makeKeyAndOrderFront(nil)
+    panel.makeFirstResponder(captureView)
+    installShortcutCaptureMonitor()
+  }
+
+  private func captureShortcut(_ shortcut: ShortcutOption) {
+    Preferences.shared.shortcut = shortcut
+    registerHotKey()
+    refreshSettingsFields()
+  }
+
+  private func installShortcutCaptureMonitor() {
+    shortcutCaptureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+      guard let self, self.shortcutCaptureWindow?.isVisible == true else {
+        return event
+      }
+
+      self.handleShortcutCaptureEvent(event)
+      return nil
+    }
+  }
+
+  private func removeShortcutCaptureMonitor() {
+    if let shortcutCaptureMonitor {
+      NSEvent.removeMonitor(shortcutCaptureMonitor)
+      self.shortcutCaptureMonitor = nil
+    }
+  }
+
+  private func handleShortcutCaptureEvent(_ event: NSEvent) {
+    if event.type == .flagsChanged {
+      updateShortcutCaptureHint(with: event)
+      return
+    }
+
+    if event.keyCode == UInt16(kVK_Escape) {
+      cancelShortcutCapture()
+      return
+    }
+
+    guard let shortcut = shortcutCandidate(from: event) else {
+      shortcutCaptureHintLabel?.stringValue = "Use a modifier with a key, or press F1-F20."
+      NSSound.beep()
+      return
+    }
+
+    guard canRegisterShortcut(shortcut) else {
+      shortcutCaptureHintLabel?.stringValue = "\(shortcut.title) is already used by macOS. Try another."
+      NSSound.beep()
+      return
+    }
+
+    acceptShortcutCapture(shortcut)
+  }
+
+  private func updateShortcutCaptureHint(with event: NSEvent) {
+    let modifiers = carbonModifiers(from: event.modifierFlags)
+    guard modifiers != 0 else {
+      shortcutCaptureHintLabel?.stringValue = "Use a modifier with a key, or press F1-F20."
+      return
+    }
+
+    shortcutCaptureHintLabel?.stringValue = "\(modifierTitle(modifiers)) + key"
+  }
+
+  private func acceptShortcutCapture(_ shortcut: ShortcutOption) {
+    removeShortcutCaptureMonitor()
+    shortcutCaptureWindow?.delegate = nil
+    shortcutCaptureWindow?.close()
+    shortcutCaptureWindow = nil
+    shortcutCaptureHintLabel = nil
+    captureShortcut(shortcut)
+    setStatus("Shortcut set: \(shortcut.title)")
+  }
+
+  private func cancelShortcutCapture() {
+    removeShortcutCaptureMonitor()
+    shortcutCaptureWindow?.delegate = nil
+    shortcutCaptureWindow?.close()
+    shortcutCaptureWindow = nil
+    shortcutCaptureHintLabel = nil
+    registerHotKey()
+    refreshSettingsFields()
+    setReadyStatus()
+  }
+
+  private func shortcutCandidate(from event: NSEvent) -> ShortcutOption? {
+    let keyCode = UInt32(event.keyCode)
+    let modifiers = carbonModifiers(from: event.modifierFlags)
+    let hasModifier = modifiers != 0
+    guard hasModifier || isStandaloneShortcutKey(keyCode) else { return nil }
+
+    let title = shortcutTitle(
+      keyCode: keyCode,
+      modifiers: modifiers,
+      fallbackLabel: event.charactersIgnoringModifiers?.uppercased()
+    )
+    return ShortcutOption(
+      id: "custom-\(keyCode)-\(modifiers)",
+      title: title,
+      keyCode: keyCode,
+      modifiers: modifiers
+    )
+  }
+
+  private func canRegisterShortcut(_ shortcut: ShortcutOption) -> Bool {
+    var temporaryRef: EventHotKeyRef?
+    let hotKeyID = EventHotKeyID(signature: fourCharCode("hush"), id: 99)
+    let status = RegisterEventHotKey(
+      shortcut.keyCode,
+      shortcut.modifiers,
+      hotKeyID,
+      GetApplicationEventTarget(),
+      0,
+      &temporaryRef
+    )
+    if let temporaryRef {
+      UnregisterEventHotKey(temporaryRef)
+    }
+    return status == noErr
   }
 
   @objc private func saveSettings() {
@@ -423,18 +759,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       tabletView.displayText = text
     }
 
-    if let shortcutID = shortcutPopup?.selectedItem?.representedObject as? String {
-      Preferences.shared.shortcutID = shortcutID
-      registerHotKey()
-    }
-
     if let apiBase = apiBaseField?.stringValue {
       Preferences.shared.apiBase = apiBase
     }
 
     setStatus("Settings saved")
-    settingsWindow?.orderOut(nil)
-    showTabletPanel(positionAtBottom: false)
+    refreshSettingsFields()
   }
 
   private func installHotKeyHandler() {
@@ -447,11 +777,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     InstallEventHandler(
       GetApplicationEventTarget(),
-      { _, _, userData in
+      { _, event, userData in
         guard let userData else { return noErr }
         let app = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+        let id = app.hotKeyID(from: event)
         DispatchQueue.main.async {
-          app.toggleDictation()
+          switch id {
+          case 2:
+            app.cancelRecordingForRetry()
+          default:
+            app.toggleDictation()
+          }
         }
         return noErr
       },
@@ -468,7 +804,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       self.hotKeyRef = nil
     }
 
-    let shortcut = ShortcutCatalog.option(id: Preferences.shared.shortcutID)
+    let shortcut = Preferences.shared.shortcut
     let hotKeyID = EventHotKeyID(signature: fourCharCode("hush"), id: 1)
     let status = RegisterEventHotKey(
       shortcut.keyCode,
@@ -486,10 +822,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
+  private func unregisterHotKey() {
+    if let hotKeyRef {
+      UnregisterEventHotKey(hotKeyRef)
+      self.hotKeyRef = nil
+    }
+  }
+
+  private func registerEscapeHotKey() {
+    if escapeHotKeyRef != nil { return }
+    let hotKeyID = EventHotKeyID(signature: fourCharCode("hush"), id: 2)
+    RegisterEventHotKey(
+      UInt32(kVK_Escape),
+      0,
+      hotKeyID,
+      GetApplicationEventTarget(),
+      0,
+      &escapeHotKeyRef
+    )
+  }
+
+  private func unregisterEscapeHotKey() {
+    if let escapeHotKeyRef {
+      UnregisterEventHotKey(escapeHotKeyRef)
+      self.escapeHotKeyRef = nil
+    }
+  }
+
+  private func installEscapeMonitors() {
+    removeEscapeMonitors()
+
+    escapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard event.keyCode == UInt16(kVK_Escape), self?.isRecording == true else {
+        return event
+      }
+      self?.cancelRecordingForRetry()
+      return nil
+    }
+
+    escapeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+      guard event.keyCode == UInt16(kVK_Escape), self?.isRecording == true else { return }
+      DispatchQueue.main.async {
+        self?.cancelRecordingForRetry()
+      }
+    }
+  }
+
+  private func removeEscapeMonitors() {
+    if let escapeLocalMonitor {
+      NSEvent.removeMonitor(escapeLocalMonitor)
+      self.escapeLocalMonitor = nil
+    }
+    if let escapeGlobalMonitor {
+      NSEvent.removeMonitor(escapeGlobalMonitor)
+      self.escapeGlobalMonitor = nil
+    }
+  }
+
+  private func hotKeyID(from event: EventRef?) -> UInt32 {
+    guard let event else { return 0 }
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+      event,
+      EventParamName(kEventParamDirectObject),
+      EventParamType(typeEventHotKeyID),
+      nil,
+      MemoryLayout<EventHotKeyID>.size,
+      nil,
+      &hotKeyID
+    )
+    return status == noErr ? hotKeyID.id : 0
+  }
+
   private func startGlowAnimation() {
     animationTimer?.invalidate()
-    animationTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
-      self?.tabletView.needsDisplay = true
+    animationTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      self.recorder?.updateMeters()
+      let averagePower = self.recorder?.averagePower(forChannel: 0) ?? -80
+      let normalized = max(0, min(1, CGFloat((averagePower + 50) / 50)))
+      self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (normalized * 0.32)
+      self.tabletView.audioLevel = self.smoothedAudioLevel
+      self.tabletView.needsDisplay = true
     }
   }
 
@@ -499,19 +913,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     tabletView.needsDisplay = true
   }
 
+  private func hideTablet(after delay: TimeInterval) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      guard !self.isRecording else { return }
+      self.tabletPanel.orderOut(nil)
+    }
+  }
+
   private func setStatus(_ value: String) {
     DispatchQueue.main.async {
       self.statusLabel?.stringValue = value
       self.tabletView?.statusText = value
+      self.mainStatusLabel?.stringValue = value
     }
   }
 
+  private func setReadyStatus() {
+    setStatus("Ready: \(Preferences.shared.shortcut.title)")
+  }
+
+  private func refreshAccessibilityStatus() {
+    accessibilityStatusLabel?.stringValue = accessibilityStatusText()
+  }
+
+  private func accessibilityStatusText() -> String {
+    ensureAccessibilityPermission(prompt: false)
+      ? "Auto-paste: Ready"
+      : "Auto-paste: Enable Accessibility, then reopen Hushly."
+  }
+
   private func playStartSound() {
-    AudioServicesPlaySystemSound(SystemSoundID(1104))
+    playPopSound()
   }
 
   private func playStopSound() {
-    AudioServicesPlaySystemSound(SystemSoundID(1105))
+    playPopSound()
+  }
+
+  private func playPopSound() {
+    guard let popSound else {
+      NSSound.beep()
+      return
+    }
+
+    popSound.stop()
+    popSound.currentTime = 0
+    popSound.play()
   }
 
   private func fourCharCode(_ value: String) -> OSType {
@@ -529,6 +976,10 @@ final class TabletView: NSView {
   }
 
   var isRecording = false {
+    didSet { needsDisplay = true }
+  }
+
+  var audioLevel: CGFloat = 0 {
     didSet { needsDisplay = true }
   }
 
@@ -557,22 +1008,22 @@ final class TabletView: NSView {
   }
 
   private func drawFallbackTablet() {
-    let rect = bounds.insetBy(dx: 10, dy: 10)
-    let path = NSBezierPath(roundedRect: rect, xRadius: 28, yRadius: 28)
+    let rect = bounds.insetBy(dx: 6, dy: 6)
+    let path = NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16)
     NSColor(calibratedRed: 0.02, green: 0.03, blue: 0.07, alpha: 0.92).setFill()
     path.fill()
     NSColor(calibratedRed: 0.18, green: 0.87, blue: 1, alpha: 0.75).setStroke()
-    path.lineWidth = 2
+    path.lineWidth = 1.5
     path.stroke()
   }
 
   private func drawGlow() {
-    let stroke = NSBezierPath(roundedRect: bounds.insetBy(dx: 14, dy: 14), xRadius: 26, yRadius: 26)
+    let stroke = NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 6), xRadius: 13, yRadius: 13)
     (isRecording
       ? NSColor(calibratedRed: 0.20, green: 0.95, blue: 1, alpha: 0.55)
       : NSColor(calibratedRed: 0.55, green: 0.32, blue: 1, alpha: 0.34)
     ).setStroke()
-    stroke.lineWidth = isRecording ? 3 : 1.5
+    stroke.lineWidth = isRecording ? 2 : 1
     stroke.stroke()
   }
 
@@ -583,10 +1034,10 @@ final class TabletView: NSView {
 
     let shadow = NSShadow()
     shadow.shadowColor = NSColor(calibratedRed: 0.10, green: 0.92, blue: 1, alpha: 0.88)
-    shadow.shadowBlurRadius = isRecording ? 16 : 8
+    shadow.shadowBlurRadius = isRecording ? 8 : 4
     shadow.shadowOffset = .zero
 
-    let font = NSFont.systemFont(ofSize: 32, weight: .heavy)
+    let font = NSFont.systemFont(ofSize: min(16, bounds.height * 0.42), weight: .heavy)
     let attrs: [NSAttributedString.Key: Any] = [
       .font: font,
       .foregroundColor: NSColor.white,
@@ -594,26 +1045,98 @@ final class TabletView: NSView {
       .shadow: shadow,
     ]
 
-    let textRect = NSRect(x: 38, y: bounds.midY - 19, width: bounds.width - 76, height: 42)
+    let textRect = NSRect(x: 24, y: bounds.midY - 10, width: bounds.width - 48, height: 22)
     displayText.draw(in: textRect, withAttributes: attrs)
   }
 
   private func drawWaveform() {
-    let barCount = 18
-    let totalWidth: CGFloat = 188
+    let barCount = 12
+    let totalWidth: CGFloat = 78
     let startX = bounds.midX - (totalWidth / 2)
-    let baseY: CGFloat = 30
+    let baseY: CGFloat = 7
     let phase = CGFloat(Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10))
 
     for index in 0..<barCount {
       let x = startX + CGFloat(index) * (totalWidth / CGFloat(barCount))
-      let pulse = sin((CGFloat(index) * 0.85) + (phase * 7))
-      let height = isRecording ? 10 + max(0, pulse) * 20 : 5
-      let rect = NSRect(x: x, y: baseY, width: 5, height: height)
-      let path = NSBezierPath(roundedRect: rect, xRadius: 2.5, yRadius: 2.5)
+      let pulse = (sin((CGFloat(index) * 0.9) + (phase * 10)) + 1) / 2
+      let liveHeight = 2 + (audioLevel * 15 * (0.45 + pulse))
+      let height = isRecording ? max(2, liveHeight) : 2
+      let rect = NSRect(x: x, y: baseY, width: 2.4, height: height)
+      let path = NSBezierPath(roundedRect: rect, xRadius: 1.2, yRadius: 1.2)
       NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: isRecording ? 0.95 : 0.34).setFill()
       path.fill()
     }
+  }
+}
+
+final class ShortcutCaptureButton: NSButton {
+  var onShortcut: ((ShortcutOption) -> Void)?
+  var onCancel: (() -> Void)?
+  var isCapturingShortcut = false
+
+  override var acceptsFirstResponder: Bool {
+    true
+  }
+
+  override func keyDown(with event: NSEvent) {
+    guard isCapturingShortcut else {
+      super.keyDown(with: event)
+      return
+    }
+
+    if event.keyCode == UInt16(kVK_Escape) {
+      isCapturingShortcut = false
+      onCancel?()
+      return
+    }
+
+    let modifiers = carbonModifiers(from: event.modifierFlags)
+    let keyCode = UInt32(event.keyCode)
+    guard modifiers != 0 || isStandaloneShortcutKey(keyCode) else {
+      NSSound.beep()
+      return
+    }
+
+    let shortcut = ShortcutOption(
+      id: "custom-\(keyCode)-\(modifiers)",
+      title: shortcutTitle(keyCode: keyCode, modifiers: modifiers, fallbackLabel: event.charactersIgnoringModifiers?.uppercased()),
+      keyCode: keyCode,
+      modifiers: modifiers
+    )
+    isCapturingShortcut = false
+    onShortcut?(shortcut)
+  }
+}
+
+final class ShortcutCaptureView: NSView {
+  var onShortcut: ((ShortcutOption) -> Void)?
+  var onCancel: (() -> Void)?
+
+  override var acceptsFirstResponder: Bool {
+    true
+  }
+
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == UInt16(kVK_Escape) {
+      onCancel?()
+      return
+    }
+
+    let modifiers = carbonModifiers(from: event.modifierFlags)
+    let keyCode = UInt32(event.keyCode)
+    guard modifiers != 0 || isStandaloneShortcutKey(keyCode) else {
+      NSSound.beep()
+      return
+    }
+
+    onShortcut?(
+      ShortcutOption(
+        id: "custom-\(keyCode)-\(modifiers)",
+        title: shortcutTitle(keyCode: keyCode, modifiers: modifiers, fallbackLabel: event.charactersIgnoringModifiers?.uppercased()),
+        keyCode: keyCode,
+        modifiers: modifiers
+      )
+    )
   }
 }
 
@@ -623,6 +1146,9 @@ final class Preferences {
   private let defaults = UserDefaults.standard
   private let tabletTextKey = "tabletText"
   private let shortcutIDKey = "shortcutID"
+  private let shortcutKeyCodeKey = "shortcutKeyCode"
+  private let shortcutModifiersKey = "shortcutModifiers"
+  private let shortcutTitleKey = "shortcutTitle"
   private let apiBaseKey = "apiBase"
 
   var tabletText: String {
@@ -641,6 +1167,24 @@ final class Preferences {
     }
     set {
       defaults.set(newValue, forKey: shortcutIDKey)
+    }
+  }
+
+  var shortcut: ShortcutOption {
+    get {
+      if defaults.object(forKey: shortcutKeyCodeKey) != nil {
+        let keyCode = UInt32(defaults.integer(forKey: shortcutKeyCodeKey))
+        let modifiers = UInt32(defaults.integer(forKey: shortcutModifiersKey))
+        let title = defaults.string(forKey: shortcutTitleKey) ?? shortcutTitle(keyCode: keyCode, modifiers: modifiers)
+        return ShortcutOption(id: "custom-\(keyCode)-\(modifiers)", title: title, keyCode: keyCode, modifiers: modifiers)
+      }
+
+      return ShortcutCatalog.option(id: shortcutID)
+    }
+    set {
+      defaults.set(Int(newValue.keyCode), forKey: shortcutKeyCodeKey)
+      defaults.set(Int(newValue.modifiers), forKey: shortcutModifiersKey)
+      defaults.set(newValue.title, forKey: shortcutTitleKey)
     }
   }
 
@@ -673,6 +1217,154 @@ enum ShortcutCatalog {
 
   static func option(id: String) -> ShortcutOption {
     options.first { $0.id == id } ?? defaultOption
+  }
+}
+
+private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
+  let cleanFlags = flags.intersection(.deviceIndependentFlagsMask)
+  var modifiers: UInt32 = 0
+  if cleanFlags.contains(.command) { modifiers |= UInt32(cmdKey) }
+  if cleanFlags.contains(.shift) { modifiers |= UInt32(shiftKey) }
+  if cleanFlags.contains(.control) { modifiers |= UInt32(controlKey) }
+  if cleanFlags.contains(.option) { modifiers |= UInt32(optionKey) }
+  return modifiers
+}
+
+private func shortcutTitle(keyCode: UInt32, modifiers: UInt32, fallbackLabel: String? = nil) -> String {
+  let modifierText = modifierTitle(modifiers)
+  var parts: [String] = []
+  if !modifierText.isEmpty { parts.append(modifierText) }
+  parts.append(keyLabel(keyCode, fallbackLabel: fallbackLabel))
+  return parts.joined(separator: " + ")
+}
+
+private func modifierTitle(_ modifiers: UInt32) -> String {
+  var parts: [String] = []
+  if modifiers & UInt32(controlKey) != 0 { parts.append("Control") }
+  if modifiers & UInt32(optionKey) != 0 { parts.append("Option") }
+  if modifiers & UInt32(shiftKey) != 0 { parts.append("Shift") }
+  if modifiers & UInt32(cmdKey) != 0 { parts.append("Command") }
+  return parts.joined(separator: " + ")
+}
+
+private func isStandaloneShortcutKey(_ keyCode: UInt32) -> Bool {
+  let functionKeys: Set<UInt32> = [
+    UInt32(kVK_F1), UInt32(kVK_F2), UInt32(kVK_F3), UInt32(kVK_F4),
+    UInt32(kVK_F5), UInt32(kVK_F6), UInt32(kVK_F7), UInt32(kVK_F8),
+    UInt32(kVK_F9), UInt32(kVK_F10), UInt32(kVK_F11), UInt32(kVK_F12),
+    UInt32(kVK_F13), UInt32(kVK_F14), UInt32(kVK_F15), UInt32(kVK_F16),
+    UInt32(kVK_F17), UInt32(kVK_F18), UInt32(kVK_F19), UInt32(kVK_F20),
+  ]
+  return functionKeys.contains(keyCode)
+}
+
+private func keyLabel(_ keyCode: UInt32, fallbackLabel: String? = nil) -> String {
+  let special: [UInt32: String] = [
+    UInt32(kVK_Space): "Space",
+    UInt32(kVK_Return): "Return",
+    UInt32(kVK_Tab): "Tab",
+    UInt32(kVK_Delete): "Delete",
+    UInt32(kVK_ForwardDelete): "Forward Delete",
+    UInt32(kVK_LeftArrow): "Left Arrow",
+    UInt32(kVK_RightArrow): "Right Arrow",
+    UInt32(kVK_UpArrow): "Up Arrow",
+    UInt32(kVK_DownArrow): "Down Arrow",
+    UInt32(kVK_F1): "F1",
+    UInt32(kVK_F2): "F2",
+    UInt32(kVK_F3): "F3",
+    UInt32(kVK_F4): "F4",
+    UInt32(kVK_F5): "F5",
+    UInt32(kVK_F6): "F6",
+    UInt32(kVK_F7): "F7",
+    UInt32(kVK_F8): "F8",
+    UInt32(kVK_F9): "F9",
+    UInt32(kVK_F10): "F10",
+    UInt32(kVK_F11): "F11",
+    UInt32(kVK_F12): "F12",
+    UInt32(kVK_F13): "F13",
+    UInt32(kVK_F14): "F14",
+    UInt32(kVK_F15): "F15",
+    UInt32(kVK_F16): "F16",
+    UInt32(kVK_F17): "F17",
+    UInt32(kVK_F18): "F18",
+    UInt32(kVK_F19): "F19",
+    UInt32(kVK_F20): "F20",
+  ]
+  if let label = special[keyCode] { return label }
+
+  let keys: [UInt32: String] = [
+    UInt32(kVK_ANSI_A): "A", UInt32(kVK_ANSI_B): "B", UInt32(kVK_ANSI_C): "C",
+    UInt32(kVK_ANSI_D): "D", UInt32(kVK_ANSI_E): "E", UInt32(kVK_ANSI_F): "F",
+    UInt32(kVK_ANSI_G): "G", UInt32(kVK_ANSI_H): "H", UInt32(kVK_ANSI_I): "I",
+    UInt32(kVK_ANSI_J): "J", UInt32(kVK_ANSI_K): "K", UInt32(kVK_ANSI_L): "L",
+    UInt32(kVK_ANSI_M): "M", UInt32(kVK_ANSI_N): "N", UInt32(kVK_ANSI_O): "O",
+    UInt32(kVK_ANSI_P): "P", UInt32(kVK_ANSI_Q): "Q", UInt32(kVK_ANSI_R): "R",
+    UInt32(kVK_ANSI_S): "S", UInt32(kVK_ANSI_T): "T", UInt32(kVK_ANSI_U): "U",
+    UInt32(kVK_ANSI_V): "V", UInt32(kVK_ANSI_W): "W", UInt32(kVK_ANSI_X): "X",
+    UInt32(kVK_ANSI_Y): "Y", UInt32(kVK_ANSI_Z): "Z",
+    UInt32(kVK_ANSI_0): "0", UInt32(kVK_ANSI_1): "1", UInt32(kVK_ANSI_2): "2",
+    UInt32(kVK_ANSI_3): "3", UInt32(kVK_ANSI_4): "4", UInt32(kVK_ANSI_5): "5",
+    UInt32(kVK_ANSI_6): "6", UInt32(kVK_ANSI_7): "7", UInt32(kVK_ANSI_8): "8",
+    UInt32(kVK_ANSI_9): "9",
+    UInt32(kVK_ANSI_Grave): "`",
+    UInt32(kVK_ANSI_Minus): "-",
+    UInt32(kVK_ANSI_Equal): "=",
+    UInt32(kVK_ANSI_LeftBracket): "[",
+    UInt32(kVK_ANSI_RightBracket): "]",
+    UInt32(kVK_ANSI_Backslash): "\\",
+    UInt32(kVK_ANSI_Semicolon): ";",
+    UInt32(kVK_ANSI_Quote): "'",
+    UInt32(kVK_ANSI_Comma): ",",
+    UInt32(kVK_ANSI_Period): ".",
+    UInt32(kVK_ANSI_Slash): "/",
+  ]
+  if let label = keys[keyCode] { return label }
+  if let fallbackLabel, !fallbackLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    return fallbackLabel
+  }
+  return "Key \(keyCode)"
+}
+
+struct TranscriptEntry: Codable {
+  let id: String
+  let createdAt: Date
+  var rawText: String
+  var cleanedText: String
+  var audioPath: String?
+  var status: String
+}
+
+final class TranscriptStore {
+  static let shared = TranscriptStore()
+
+  private let supportURL: URL
+  private let fileURL: URL
+
+  private init() {
+    supportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("Hushly", isDirectory: true)
+    try? FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
+    fileURL = supportURL.appendingPathComponent("transcripts.json")
+  }
+
+  func load() -> [TranscriptEntry] {
+    guard let data = try? Data(contentsOf: fileURL) else { return [] }
+    return (try? JSONDecoder().decode([TranscriptEntry].self, from: data)) ?? []
+  }
+
+  func save(_ entries: [TranscriptEntry]) {
+    guard let data = try? JSONEncoder().encode(entries) else { return }
+    try? data.write(to: fileURL, options: [.atomic])
+  }
+
+  func storeAudio(_ sourceURL: URL) throws -> URL {
+    let audioURL = supportURL.appendingPathComponent("Audio", isDirectory: true)
+    try FileManager.default.createDirectory(at: audioURL, withIntermediateDirectories: true)
+    let destination = audioURL
+      .appendingPathComponent("pending-\(UUID().uuidString)")
+      .appendingPathExtension("m4a")
+    try FileManager.default.copyItem(at: sourceURL, to: destination)
+    return destination
   }
 }
 

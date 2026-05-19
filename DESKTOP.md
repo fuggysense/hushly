@@ -9,11 +9,12 @@ open dist/macos/Hushly.app
 ```
 
 What it does:
-- Runs as a small menu-bar app with a draggable glowing tablet overlay.
-- Uses a configurable global hotkey to start and stop dictation.
+- Runs as a small menu-bar app with a normal settings/control window.
+- Shows a much smaller draggable glowing tablet overlay only while dictating.
+- Uses a configurable global hotkey to start and stop dictation. Click the shortcut control and press the key combo you want.
 - Records with AVFoundation, sends audio to Hushly's `/transcribe` endpoint, cleans it with `/clean`, then pastes into the app that was focused when dictation started.
 - Plays a short system sound on start and stop.
-- Lets you edit the tablet text, shortcut, and API base from **Settings**.
+- Lets you edit the tablet text, shortcut, and API base from the app window.
 - Copies the final text to the clipboard even if macOS Accessibility permission is not granted.
 
 Default settings:
@@ -24,6 +25,7 @@ Default settings:
 Permissions:
 - Microphone permission is required to record.
 - Accessibility permission is required for automatic paste into other apps. Without it, Hushly still copies the final text to the clipboard.
+- For auto-paste, focus the target text box first and start dictation with the global shortcut. The in-app Dictate button is mainly a settings/test control.
 
 Source files:
 - `desktop/macos/HushlyLite.swift`
