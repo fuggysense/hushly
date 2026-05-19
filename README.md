@@ -1,3 +1,11 @@
+# Hushly
+
+Hushly is a low-RAM dictation app with a native macOS desktop client and Vercel API routes for transcription and cleanup.
+
+Operational docs:
+
+- [Distribution, API keys, and updates](docs/distribution-and-api-keys.md)
+
 # Welcome to your Expo app 👋
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).

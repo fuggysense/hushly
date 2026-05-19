@@ -2,15 +2,56 @@
 // Client uploads raw audio as request body with Content-Type set
 // (e.g. audio/m4a from iOS, audio/webm from web).
 
+import {
+  authenticateRequest,
+  getSupabaseAdmin,
+  jsonError,
+  recordUsage,
+  type RequestIdentity,
+} from '@/lib/serverAuth';
+
 const DG_URL = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true';
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
+  const admin = getSupabaseAdmin();
+  let identity: RequestIdentity | null = null;
+  let status = 200;
+  let errorMessage = '';
+  let audioBytes = 0;
+
+  const auth = await authenticateRequest(request, admin);
+  if (auth instanceof Response) return auth;
+  identity = auth.identity;
+
   const key = process.env.DEEPGRAM_API_KEY;
-  if (!key) return jsonError(500, 'DEEPGRAM_API_KEY not set on server');
+  if (!key) {
+    status = 500;
+    errorMessage = 'DEEPGRAM_API_KEY not set on server';
+    await recordUsage(auth.admin, identity, {
+      route: '/transcribe',
+      status,
+      durationMs: Date.now() - startedAt,
+      error: errorMessage,
+    });
+    return jsonError(status, errorMessage);
+  }
 
   const contentType = request.headers.get('content-type') || 'audio/m4a';
   const body = await request.arrayBuffer();
-  if (body.byteLength === 0) return jsonError(400, 'empty body');
+  audioBytes = body.byteLength;
+  if (body.byteLength === 0) {
+    status = 400;
+    errorMessage = 'empty body';
+    await recordUsage(auth.admin, identity, {
+      route: '/transcribe',
+      status,
+      durationMs: Date.now() - startedAt,
+      audioBytes,
+      error: errorMessage,
+    });
+    return jsonError(status, errorMessage);
+  }
 
   const dg = await fetch(DG_URL, {
     method: 'POST',
@@ -23,27 +64,37 @@ export async function POST(request: Request) {
 
   if (!dg.ok) {
     const errText = await dg.text();
-    return jsonError(dg.status, `deepgram: ${errText.slice(0, 400)}`);
+    status = dg.status;
+    errorMessage = `deepgram: ${errText.slice(0, 400)}`;
+    await recordUsage(auth.admin, identity, {
+      route: '/transcribe',
+      status,
+      durationMs: Date.now() - startedAt,
+      audioBytes,
+      error: errorMessage,
+    });
+    return jsonError(status, errorMessage);
   }
 
   const dgJson = (await dg.json()) as DeepgramResponse;
   const transcript =
     dgJson?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '';
 
-  return Response.json({ transcript });
-}
-
-function jsonError(status: number, error: string) {
-  return new Response(JSON.stringify({ error }), {
+  await recordUsage(auth.admin, identity, {
+    route: '/transcribe',
     status,
-    headers: { 'Content-Type': 'application/json' },
+    durationMs: Date.now() - startedAt,
+    audioBytes,
+    outputChars: transcript.length,
   });
+
+  return Response.json({ transcript });
 }
 
 type DeepgramResponse = {
   results?: {
-    channels?: Array<{
-      alternatives?: Array<{ transcript?: string }>;
-    }>;
+    channels?: {
+      alternatives?: { transcript?: string }[];
+    }[];
   };
 };

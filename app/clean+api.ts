@@ -10,6 +10,7 @@
 //   context:     freeform context the user maintains (e.g. project names)
 
 import Anthropic from '@anthropic-ai/sdk';
+import { authenticateRequest, getSupabaseAdmin, jsonError, recordUsage } from '@/lib/serverAuth';
 
 const CLEANUP_MODEL = 'claude-haiku-4-5-20251001';
 const CLEANUP_RETRY_DELAYS_MS = [350, 900];
@@ -125,14 +126,29 @@ const MODE_OVERRIDES: Record<string, string> = {
 };
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
+  const admin = getSupabaseAdmin();
+  const auth = await authenticateRequest(request, admin);
+  if (auth instanceof Response) return auth;
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return jsonError(500, 'ANTHROPIC_API_KEY not set on server');
+  if (!apiKey) {
+    const message = 'ANTHROPIC_API_KEY not set on server';
+    await recordUsage(auth.admin, auth.identity, {
+      route: '/clean',
+      status: 500,
+      durationMs: Date.now() - startedAt,
+      error: message,
+    });
+    return jsonError(500, message);
+  }
 
   let body: {
     text?: string;
     mode?: string;
     target_app?: string;
     vocabulary?: string[];
+    dictionary?: DictionaryEntry[];
     context?: string;
   } = {};
   try {
@@ -156,11 +172,20 @@ export async function POST(request: Request) {
       ? `CUSTOM VOCABULARY (spell exactly as listed):\n${body.vocabulary.map((v) => `- ${v}`).join('\n')}`
       : '';
 
+  const dictionary = sanitizeDictionary(body.dictionary);
+  const dictionaryRule = dictionary.length
+    ? `CUSTOM DICTIONARY REPLACEMENTS:\n${dictionary
+        .map((entry) => `- When the cleaned text contains "${entry.trigger}", replace it with "${entry.replacement}".`)
+        .join('\n')}`
+    : '';
+
   const ctx = body.context
     ? `SPEAKER CONTEXT (for disambiguation only, not for adding content):\n${body.context}`
     : '';
 
-  const system = [BASE_RULES, modeRule, appHint, vocab, ctx].filter(Boolean).join('\n\n');
+  const system = [BASE_RULES, modeRule, appHint, vocab, dictionaryRule, ctx]
+    .filter(Boolean)
+    .join('\n\n');
 
   const client = new Anthropic({ apiKey, maxRetries: 0, timeout: CLEANUP_TIMEOUT_MS });
 
@@ -171,12 +196,29 @@ export async function POST(request: Request) {
       .map((b) => (b as { text: string }).text)
       .join('')
       .trim();
-    return Response.json({ cleaned });
+    const finalText = applyDictionary(cleaned, dictionary);
+    await recordUsage(auth.admin, auth.identity, {
+      route: '/clean',
+      status: 200,
+      durationMs: Date.now() - startedAt,
+      inputChars: raw.length,
+      outputChars: finalText.length,
+    });
+    return Response.json({ cleaned: finalText });
   } catch (e) {
     if (isAnthropicOverloaded(e)) {
+      const fallback = applyDictionary(raw, dictionary);
+      await recordUsage(auth.admin, auth.identity, {
+        route: '/clean',
+        status: 200,
+        durationMs: Date.now() - startedAt,
+        inputChars: raw.length,
+        outputChars: fallback.length,
+        error: 'anthropic overloaded; returned raw transcript',
+      });
       return Response.json(
         {
-          cleaned: raw,
+          cleaned: fallback,
           degraded: true,
           warning: 'Anthropic is overloaded; Hushly returned the raw transcript.',
         },
@@ -185,6 +227,13 @@ export async function POST(request: Request) {
     }
 
     const message = e instanceof Error ? e.message : String(e);
+    await recordUsage(auth.admin, auth.identity, {
+      route: '/clean',
+      status: 502,
+      durationMs: Date.now() - startedAt,
+      inputChars: raw.length,
+      error: `anthropic: ${message.slice(0, 400)}`,
+    });
     return jsonError(502, `anthropic: ${message.slice(0, 400)}`);
   }
 }
@@ -253,9 +302,32 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function jsonError(status: number, error: string) {
-  return new Response(JSON.stringify({ error }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+type DictionaryEntry = {
+  trigger?: string;
+  replacement?: string;
+};
+
+function sanitizeDictionary(dictionary: DictionaryEntry[] | undefined) {
+  if (!Array.isArray(dictionary)) return [];
+  return dictionary
+    .map((entry) => ({
+      trigger: (entry.trigger ?? '').trim(),
+      replacement: (entry.replacement ?? '').trim(),
+    }))
+    .filter((entry) => entry.trigger && entry.replacement)
+    .slice(0, 100);
+}
+
+function applyDictionary(text: string, dictionary: { trigger: string; replacement: string }[]) {
+  return dictionary.reduce((next, entry) => {
+    const escaped = escapeRegExp(entry.trigger);
+    const startsWord = /^\w/.test(entry.trigger);
+    const endsWord = /\w$/.test(entry.trigger);
+    const pattern = `${startsWord ? '\\b' : ''}${escaped}${endsWord ? '\\b' : ''}`;
+    return next.replace(new RegExp(pattern, 'gi'), entry.replacement);
+  }, text);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

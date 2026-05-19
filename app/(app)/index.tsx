@@ -300,6 +300,12 @@ export default function Home() {
           <Link href="/(app)/history" style={styles.headerLink}>
             History
           </Link>
+          <Link href="/(app)/usage" style={styles.headerLink}>
+            Usage
+          </Link>
+          <Link href="/(app)/admin" style={styles.headerLink}>
+            Admin
+          </Link>
           <Pressable
             onPress={() => supabase.auth.signOut()}
             accessibilityRole="button"

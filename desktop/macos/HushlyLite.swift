@@ -16,7 +16,7 @@ struct HushlyLiteApp {
   }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, @unchecked Sendable {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, @unchecked Sendable {
   private var tabletPanel: NSPanel!
   private var tabletView: TabletView!
   private var statusLabel: NSTextField!
@@ -39,6 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var shortcutCaptureMonitor: Any?
   private var shortcutCaptureHintLabel: NSTextField?
   private var apiBaseField: NSTextField?
+  private var apiKeyField: NSSecureTextField?
+  private var dictionaryPane: NSView?
+  private var dictionaryTable: NSTableView?
+  private var dictionaryStatusLabel: NSTextField?
+  private var addDictionaryButton: NSButton?
+  private var removeDictionaryButton: NSButton?
+  private var usagePane: NSView?
+  private var usageSummaryText: NSTextView?
+  private var usageStatusLabel: NSTextField?
   private var mainStatusLabel: NSTextField?
   private var accessibilityStatusLabel: NSTextField?
   private var tabControl: NSSegmentedControl?
@@ -51,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var copyHistoryButton: NSButton?
   private var retryHistoryButton: NSButton?
   private var historyItems: [TranscriptEntry] = []
+  private var dictionaryItems: [DictionaryReplacement] = []
   private var hotKeyRef: EventHotKeyRef?
   private var escapeHotKeyRef: EventHotKeyRef?
   private var eventHandlerRef: EventHandlerRef?
@@ -117,10 +127,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       tabletBorderColorWell = nil
       shortcutButton = nil
       apiBaseField = nil
+      apiKeyField = nil
       mainStatusLabel = nil
       accessibilityStatusLabel = nil
       tabControl = nil
       settingsPane = nil
+      dictionaryPane = nil
+      dictionaryTable = nil
+      dictionaryStatusLabel = nil
+      addDictionaryButton = nil
+      removeDictionaryButton = nil
+      usagePane = nil
+      usageSummaryText = nil
+      usageStatusLabel = nil
       historyPane = nil
       historyTable = nil
       historyDetailText = nil
@@ -451,6 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     var request = URLRequest(url: apiURL(path: "/transcribe"))
     request.httpMethod = "POST"
     request.setValue("audio/m4a", forHTTPHeaderField: "Content-Type")
+    addAPIKeyHeader(to: &request)
 
     let data = try Data(contentsOf: fileURL)
     let (responseData, response) = try await URLSession.shared.upload(for: request, from: data)
@@ -462,8 +482,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     var request = URLRequest(url: apiURL(path: "/clean"))
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    addAPIKeyHeader(to: &request)
 
-    let payload = try JSONSerialization.data(withJSONObject: ["text": transcript])
+    var body: [String: Any] = ["text": transcript]
+    let dictionary = Preferences.shared.dictionaryEntries.map {
+      ["trigger": $0.trigger, "replacement": $0.replacement]
+    }
+    if !dictionary.isEmpty {
+      body["dictionary"] = dictionary
+    }
+
+    let payload = try JSONSerialization.data(withJSONObject: body)
     let (responseData, response) = try await URLSession.shared.upload(for: request, from: payload)
     let json = try decodeAPIResponse(data: responseData, response: response, label: "clean")
     return json["cleaned"] as? String ?? transcript
@@ -486,6 +515,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func apiURL(path: String) -> URL {
     let base = Preferences.shared.apiBase
     return URL(string: "\(base)\(path)")!
+  }
+
+  private func addAPIKeyHeader(to request: inout URLRequest) {
+    let apiKey = Preferences.shared.apiKey
+    if !apiKey.isEmpty {
+      request.setValue(apiKey, forHTTPHeaderField: "X-Hushly-API-Key")
+    }
   }
 
   private func paste(_ text: String) {
@@ -580,7 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func buildSettingsWindow() {
     let width: CGFloat = 620
-    let height: CGFloat = 600
+    let height: CGFloat = 660
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable],
@@ -594,20 +630,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
     let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 
-    let tabs = NSSegmentedControl(labels: ["Settings", "History"], trackingMode: .selectOne, target: self, action: #selector(switchMainPane))
-    tabs.frame = NSRect(x: 24, y: height - 48, width: 220, height: 28)
+    let tabs = NSSegmentedControl(labels: ["Settings", "Dictionary", "Usage", "History"], trackingMode: .selectOne, target: self, action: #selector(switchMainPane))
+    tabs.frame = NSRect(x: 24, y: height - 48, width: 410, height: 28)
     tabs.selectedSegment = 0
     content.addSubview(tabs)
     tabControl = tabs
 
     let paneFrame = NSRect(x: 0, y: 0, width: width, height: height - 64)
     let settingsPane = buildSettingsPane(frame: paneFrame)
+    let dictionaryPane = buildDictionaryPane(frame: paneFrame)
+    let usagePane = buildUsagePane(frame: paneFrame)
     let historyPane = buildHistoryPane(frame: paneFrame)
+    dictionaryPane.isHidden = true
+    usagePane.isHidden = true
     historyPane.isHidden = true
 
     content.addSubview(settingsPane)
+    content.addSubview(dictionaryPane)
+    content.addSubview(usagePane)
     content.addSubview(historyPane)
     self.settingsPane = settingsPane
+    self.dictionaryPane = dictionaryPane
+    self.usagePane = usagePane
     self.historyPane = historyPane
 
     window.contentView = content
@@ -695,8 +739,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(apiField)
     apiBaseField = apiField
 
+    let apiKeyLabel = NSTextField(labelWithString: "API key")
+    apiKeyLabel.frame = NSRect(x: 32, y: 120, width: 120, height: 18)
+    content.addSubview(apiKeyLabel)
+
+    let keyField = NSSecureTextField(string: Preferences.shared.apiKey)
+    keyField.frame = NSRect(x: 168, y: 114, width: 396, height: 30)
+    content.addSubview(keyField)
+    apiKeyField = keyField
+
     let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
-    accessStatus.frame = NSRect(x: 32, y: 108, width: 532, height: 18)
+    accessStatus.frame = NSRect(x: 32, y: 78, width: 532, height: 18)
     accessStatus.textColor = NSColor.secondaryLabelColor
     accessStatus.font = NSFont.systemFont(ofSize: 11)
     accessStatus.lineBreakMode = .byTruncatingTail
@@ -705,7 +758,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     accessibilityStatusLabel = accessStatus
 
     let mainStatus = NSTextField(labelWithString: "Ready: \(Preferences.shared.shortcut.title)")
-    mainStatus.frame = NSRect(x: 32, y: 76, width: 532, height: 18)
+    mainStatus.frame = NSRect(x: 32, y: 50, width: 532, height: 18)
     mainStatus.textColor = NSColor.secondaryLabelColor
     mainStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
     mainStatus.lineBreakMode = .byTruncatingTail
@@ -714,14 +767,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     mainStatusLabel = mainStatus
 
     let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
-    dictateButton.frame = NSRect(x: 360, y: 24, width: 96, height: 32)
+    dictateButton.frame = NSRect(x: 360, y: 12, width: 96, height: 32)
     dictateButton.bezelStyle = .rounded
     content.addSubview(dictateButton)
 
     let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
-    saveButton.frame = NSRect(x: 468, y: 24, width: 96, height: 32)
+    saveButton.frame = NSRect(x: 468, y: 12, width: 96, height: 32)
     saveButton.bezelStyle = .rounded
     content.addSubview(saveButton)
+
+    return content
+  }
+
+  private func buildDictionaryPane(frame: NSRect) -> NSView {
+    let content = NSView(frame: frame)
+    dictionaryItems = Preferences.shared.dictionaryEntries
+
+    let title = NSTextField(labelWithString: "Dictionary")
+    title.frame = NSRect(x: 32, y: frame.height - 92, width: 200, height: 22)
+    title.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    content.addSubview(title)
+
+    let leftLabel = NSTextField(labelWithString: "When I say")
+    leftLabel.frame = NSRect(x: 44, y: frame.height - 126, width: 220, height: 18)
+    leftLabel.textColor = NSColor.secondaryLabelColor
+    leftLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    content.addSubview(leftLabel)
+
+    let rightLabel = NSTextField(labelWithString: "Write this")
+    rightLabel.frame = NSRect(x: 302, y: frame.height - 126, width: 220, height: 18)
+    rightLabel.textColor = NSColor.secondaryLabelColor
+    rightLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    content.addSubview(rightLabel)
+
+    let scroll = NSScrollView(frame: NSRect(x: 32, y: 86, width: 532, height: frame.height - 240))
+    scroll.borderType = .bezelBorder
+    scroll.hasVerticalScroller = true
+    let table = NSTableView(frame: scroll.bounds)
+    table.headerView = nil
+    table.rowHeight = 46
+    table.intercellSpacing = NSSize(width: 12, height: 8)
+    table.delegate = self
+    table.dataSource = self
+    table.allowsMultipleSelection = false
+    table.usesAlternatingRowBackgroundColors = false
+    let sayColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("dictionary-trigger"))
+    sayColumn.width = 245
+    sayColumn.minWidth = 180
+    table.addTableColumn(sayColumn)
+    let replaceColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("dictionary-replacement"))
+    replaceColumn.width = 245
+    replaceColumn.minWidth = 180
+    table.addTableColumn(replaceColumn)
+    scroll.documentView = table
+    content.addSubview(scroll)
+    dictionaryTable = table
+
+    let example = NSTextField(labelWithString: "Example: Gmail -> my Gmail account")
+    example.frame = NSRect(x: 32, y: 58, width: 320, height: 18)
+    example.textColor = NSColor.secondaryLabelColor
+    example.font = NSFont.systemFont(ofSize: 11)
+    content.addSubview(example)
+
+    let addButton = NSButton(title: "+", target: self, action: #selector(addDictionaryRule))
+    addButton.frame = NSRect(x: 32, y: 20, width: 36, height: 30)
+    addButton.bezelStyle = .texturedRounded
+    content.addSubview(addButton)
+    addDictionaryButton = addButton
+
+    let removeButton = NSButton(title: "-", target: self, action: #selector(removeDictionaryRule))
+    removeButton.frame = NSRect(x: 70, y: 20, width: 36, height: 30)
+    removeButton.bezelStyle = .texturedRounded
+    content.addSubview(removeButton)
+    removeDictionaryButton = removeButton
+
+    let status = NSTextField(labelWithString: dictionaryStatusText())
+    status.frame = NSRect(x: 118, y: 28, width: 250, height: 18)
+    status.textColor = NSColor.secondaryLabelColor
+    status.font = NSFont.systemFont(ofSize: 11)
+    status.lineBreakMode = .byTruncatingTail
+    content.addSubview(status)
+    dictionaryStatusLabel = status
+
+    let saveButton = NSButton(title: "Save Dictionary", target: self, action: #selector(saveDictionary))
+    saveButton.frame = NSRect(x: 420, y: 20, width: 144, height: 32)
+    saveButton.bezelStyle = .rounded
+    content.addSubview(saveButton)
+
+    refreshDictionaryControls()
+
+    return content
+  }
+
+  private func buildUsagePane(frame: NSRect) -> NSView {
+    let content = NSView(frame: frame)
+
+    let title = NSTextField(labelWithString: "Usage")
+    title.frame = NSRect(x: 32, y: frame.height - 92, width: 200, height: 22)
+    title.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    content.addSubview(title)
+
+    let status = NSTextField(labelWithString: usageStatusText())
+    status.frame = NSRect(x: 32, y: frame.height - 120, width: 532, height: 18)
+    status.textColor = NSColor.secondaryLabelColor
+    status.font = NSFont.systemFont(ofSize: 12)
+    status.lineBreakMode = .byTruncatingTail
+    content.addSubview(status)
+    usageStatusLabel = status
+
+    let scroll = NSScrollView(frame: NSRect(x: 32, y: 82, width: 532, height: frame.height - 230))
+    scroll.borderType = .bezelBorder
+    scroll.hasVerticalScroller = true
+    let textView = NSTextView(frame: scroll.bounds)
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.drawsBackground = false
+    textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    textView.textColor = NSColor.labelColor
+    textView.textContainerInset = NSSize(width: 8, height: 8)
+    textView.string = "Click Refresh to load usage for this API key."
+    scroll.documentView = textView
+    content.addSubview(scroll)
+    usageSummaryText = textView
+
+    let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshUsage))
+    refreshButton.frame = NSRect(x: 468, y: 26, width: 96, height: 32)
+    refreshButton.bezelStyle = .rounded
+    content.addSubview(refreshButton)
 
     return content
   }
@@ -802,10 +974,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   @objc private func switchMainPane() {
-    let showingHistory = tabControl?.selectedSegment == 1
-    settingsPane?.isHidden = showingHistory
-    historyPane?.isHidden = !showingHistory
-    if showingHistory {
+    let selected = tabControl?.selectedSegment ?? 0
+    settingsPane?.isHidden = selected != 0
+    dictionaryPane?.isHidden = selected != 1
+    usagePane?.isHidden = selected != 2
+    historyPane?.isHidden = selected != 3
+    if selected == 2 {
+      refreshUsage()
+    } else if selected == 3 {
       refreshHistoryUI()
     }
   }
@@ -817,6 +993,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletShapeControl?.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
     tabletBorderColorWell?.color = Preferences.shared.tabletBorderColor
     apiBaseField?.stringValue = Preferences.shared.apiBase
+    apiKeyField?.stringValue = Preferences.shared.apiKey
+    dictionaryStatusLabel?.stringValue = dictionaryStatusText()
+    usageStatusLabel?.stringValue = usageStatusText()
     shortcutButton?.title = Preferences.shared.shortcut.title
     refreshAccessibilityStatus()
   }
@@ -913,6 +1092,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     "Storage: local on this Mac. Supabase sync: not connected in the desktop app."
   }
 
+  private func dictionaryStatusText() -> String {
+    let count = dictionaryItems.filter {
+      !$0.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !$0.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }.count
+    return count == 1 ? "1 dictionary rule saved" : "\(count) dictionary rules saved"
+  }
+
+  private func usageStatusText() -> String {
+    Preferences.shared.apiKey.isEmpty ? "Add an API key in Settings." : "Usage for saved API key."
+  }
+
+  @objc private func saveDictionary() {
+    settingsWindow?.makeFirstResponder(nil)
+    dictionaryItems = dictionaryItems.filter {
+      !$0.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !$0.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    Preferences.shared.dictionaryEntries = dictionaryItems
+    dictionaryTable?.reloadData()
+    dictionaryStatusLabel?.stringValue = dictionaryStatusText()
+    refreshDictionaryControls()
+    setStatus("Dictionary saved")
+  }
+
+  @objc private func addDictionaryRule() {
+    dictionaryItems.append(DictionaryReplacement(trigger: "", replacement: ""))
+    dictionaryTable?.reloadData()
+    let row = dictionaryItems.count - 1
+    dictionaryTable?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    DispatchQueue.main.async {
+      self.dictionaryTable?.editColumn(0, row: row, with: nil, select: true)
+    }
+    refreshDictionaryControls()
+  }
+
+  @objc private func removeDictionaryRule() {
+    guard let table = dictionaryTable else { return }
+    let selected = table.selectedRow >= 0 ? table.selectedRow : dictionaryItems.count - 1
+    guard selected >= 0, selected < dictionaryItems.count else { return }
+    dictionaryItems.remove(at: selected)
+    table.reloadData()
+    if !dictionaryItems.isEmpty {
+      let nextRow = min(selected, dictionaryItems.count - 1)
+      table.selectRowIndexes(IndexSet(integer: nextRow), byExtendingSelection: false)
+    }
+    refreshDictionaryControls()
+  }
+
+  private func refreshDictionaryControls() {
+    removeDictionaryButton?.isEnabled = !dictionaryItems.isEmpty
+    dictionaryStatusLabel?.stringValue = dictionaryStatusText()
+  }
+
+  @objc private func refreshUsage() {
+    usageStatusLabel?.stringValue = usageStatusText()
+    guard !Preferences.shared.apiKey.isEmpty else {
+      usageSummaryText?.string = "No API key saved."
+      return
+    }
+
+    usageSummaryText?.string = "Loading..."
+    Task { [weak self] in
+      await self?.loadUsageSummary()
+    }
+  }
+
+  private func loadUsageSummary() async {
+    do {
+      var request = URLRequest(url: apiURL(path: "/usage"))
+      request.httpMethod = "GET"
+      addAPIKeyHeader(to: &request)
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let json = try decodeAPIResponse(data: data, response: response, label: "usage")
+      let text = formatUsageSummary(json)
+      DispatchQueue.main.async {
+        self.usageSummaryText?.string = text
+        self.usageStatusLabel?.stringValue = "Usage loaded"
+      }
+    } catch {
+      DispatchQueue.main.async {
+        self.usageSummaryText?.string = error.localizedDescription
+        self.usageStatusLabel?.stringValue = "Usage failed"
+      }
+    }
+  }
+
+  private func formatUsageSummary(_ json: [String: Any]) -> String {
+    let identity = json["identity"] as? [String: Any] ?? [:]
+    let label = (identity["label"] as? String) ?? (identity["email"] as? String) ?? "Current key"
+    let tag = identity["tag"] as? String
+    let today = json["today"] as? [String: Any] ?? [:]
+    let month = json["last30d"] as? [String: Any] ?? [:]
+
+    var lines = ["Identity: \(label)"]
+    if let tag, !tag.isEmpty {
+      lines.append("Tag: \(tag)")
+    }
+    lines.append("")
+    lines.append("Today")
+    lines.append("  Requests: \(intValue(today["requests"]))")
+    lines.append("  Transcriptions: \(intValue(today["transcriptions"]))")
+    lines.append("  Cleanups: \(intValue(today["cleanups"]))")
+    lines.append("  Errors: \(intValue(today["errors"]))")
+    lines.append("  Audio uploaded: \(byteString(intValue(today["audioBytes"])))")
+    lines.append("")
+    lines.append("Last 30 days")
+    lines.append("  Requests: \(intValue(month["requests"]))")
+    lines.append("  Transcriptions: \(intValue(month["transcriptions"]))")
+    lines.append("  Cleanups: \(intValue(month["cleanups"]))")
+    lines.append("  Errors: \(intValue(month["errors"]))")
+    lines.append("  Audio uploaded: \(byteString(intValue(month["audioBytes"])))")
+    return lines.joined(separator: "\n")
+  }
+
   private func formatHistoryDate(_ date: Date) -> String {
     let formatter = DateFormatter()
     formatter.dateStyle = .short
@@ -985,10 +1279,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   func numberOfRows(in tableView: NSTableView) -> Int {
-    historyItems.count
+    if tableView === dictionaryTable {
+      return dictionaryItems.count
+    }
+    return historyItems.count
   }
 
   func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    if tableView === dictionaryTable {
+      return dictionaryCell(tableView, tableColumn: tableColumn, row: row)
+    }
+
     guard row >= 0, row < historyItems.count else { return nil }
     let columnID = tableColumn?.identifier.rawValue ?? "text"
     let cellID = NSUserInterfaceItemIdentifier("history-\(columnID)")
@@ -1014,7 +1315,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   func tableViewSelectionDidChange(_ notification: Notification) {
-    refreshHistoryDetail()
+    if notification.object as? NSTableView === dictionaryTable {
+      refreshDictionaryControls()
+    } else {
+      refreshHistoryDetail()
+    }
+  }
+
+  private func dictionaryCell(_ tableView: NSTableView, tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    guard row >= 0, row < dictionaryItems.count else { return nil }
+    let columnID = tableColumn?.identifier.rawValue ?? "dictionary-trigger"
+    let cellID = NSUserInterfaceItemIdentifier(columnID)
+    let field = tableView.makeView(withIdentifier: cellID, owner: self) as? NSTextField ?? NSTextField(string: "")
+    field.identifier = cellID
+    field.delegate = self
+    field.tag = row
+    field.isEditable = true
+    field.isBordered = true
+    field.isBezeled = true
+    field.bezelStyle = .roundedBezel
+    field.drawsBackground = true
+    field.backgroundColor = NSColor.controlBackgroundColor
+    field.font = NSFont.systemFont(ofSize: 13)
+    field.frame = NSRect(x: 6, y: 7, width: max(40, (tableColumn?.width ?? 240) - 12), height: 30)
+    field.autoresizingMask = [.width]
+    field.lineBreakMode = .byTruncatingTail
+
+    if columnID == "dictionary-replacement" {
+      field.placeholderString = "my Gmail account"
+      field.stringValue = dictionaryItems[row].replacement
+    } else {
+      field.placeholderString = "Gmail"
+      field.stringValue = dictionaryItems[row].trigger
+    }
+    return field
+  }
+
+  func controlTextDidEndEditing(_ obj: Notification) {
+    guard let field = obj.object as? NSTextField else { return }
+    let row = field.tag
+    guard row >= 0, row < dictionaryItems.count else { return }
+
+    switch field.identifier?.rawValue {
+    case "dictionary-replacement":
+      dictionaryItems[row].replacement = field.stringValue
+    case "dictionary-trigger":
+      dictionaryItems[row].trigger = field.stringValue
+    default:
+      return
+    }
+    refreshDictionaryControls()
   }
 
   @objc private func beginShortcutCapture() {
@@ -1367,6 +1717,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
     if let apiBase = apiBaseField?.stringValue {
       Preferences.shared.apiBase = apiBase
+    }
+
+    if let apiKey = apiKeyField?.stringValue {
+      Preferences.shared.apiKey = apiKey
     }
 
     applyTabletAppearance()
@@ -1885,6 +2239,8 @@ final class Preferences {
   private let shortcutModifiersKey = "shortcutModifiers"
   private let shortcutTitleKey = "shortcutTitle"
   private let apiBaseKey = "apiBase"
+  private let apiKeyKey = "apiKey"
+  private let dictionaryTextKey = "dictionaryText"
 
   var tabletText: String {
     get {
@@ -1967,6 +2323,38 @@ final class Preferences {
       defaults.set(normalizedAPIBase(newValue), forKey: apiBaseKey)
     }
   }
+
+  var apiKey: String {
+    get {
+      defaults.string(forKey: apiKeyKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+    set {
+      defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: apiKeyKey)
+    }
+  }
+
+  var dictionaryText: String {
+    get {
+      defaults.string(forKey: dictionaryTextKey) ?? ""
+    }
+    set {
+      defaults.set(newValue, forKey: dictionaryTextKey)
+    }
+  }
+
+  var dictionaryEntries: [DictionaryReplacement] {
+    get {
+      parseDictionaryEntries(dictionaryText)
+    }
+    set {
+      dictionaryText = serializeDictionaryEntries(newValue)
+    }
+  }
+}
+
+struct DictionaryReplacement {
+  var trigger: String
+  var replacement: String
 }
 
 struct ShortcutOption {
@@ -2287,4 +2675,52 @@ private func normalizedAPIBase(_ raw: String) -> String {
   let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return defaultAPIBase }
   return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+}
+
+private func parseDictionaryEntries(_ text: String) -> [DictionaryReplacement] {
+  text
+    .components(separatedBy: .newlines)
+    .compactMap { line -> DictionaryReplacement? in
+      let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
+
+      let separators = ["=>", "="]
+      for separator in separators {
+        if let range = trimmed.range(of: separator) {
+          let trigger = trimmed[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+          let replacement = trimmed[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+          if !trigger.isEmpty, !replacement.isEmpty {
+            return DictionaryReplacement(trigger: trigger, replacement: replacement)
+          }
+        }
+      }
+      return nil
+    }
+}
+
+private func serializeDictionaryEntries(_ entries: [DictionaryReplacement]) -> String {
+  entries
+    .map {
+      DictionaryReplacement(
+        trigger: $0.trigger.trimmingCharacters(in: .whitespacesAndNewlines),
+        replacement: $0.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+      )
+    }
+    .filter { !$0.trigger.isEmpty && !$0.replacement.isEmpty }
+    .map { "\($0.trigger) = \($0.replacement)" }
+    .joined(separator: "\n")
+}
+
+private func intValue(_ value: Any?) -> Int {
+  if let int = value as? Int { return int }
+  if let double = value as? Double { return Int(double) }
+  if let number = value as? NSNumber { return number.intValue }
+  return 0
+}
+
+private func byteString(_ bytes: Int) -> String {
+  if bytes < 1024 { return "\(bytes) B" }
+  let kb = Double(bytes) / 1024
+  if kb < 1024 { return String(format: "%.1f KB", kb) }
+  return String(format: "%.1f MB", kb / 1024)
 }

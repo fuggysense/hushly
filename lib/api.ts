@@ -27,10 +27,18 @@ async function fetchApi(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
+async function sessionAuthHeader(): Promise<Record<string, string>> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
+
 export async function transcribe(body: BodyInit, contentType: string): Promise<string> {
+  const authHeader = await sessionAuthHeader();
   const res = await fetchApi('/transcribe', {
     method: 'POST',
-    headers: { 'Content-Type': contentType },
+    headers: { 'Content-Type': contentType, ...authHeader },
     body,
   });
   if (!res.ok) {
@@ -41,12 +49,19 @@ export async function transcribe(body: BodyInit, contentType: string): Promise<s
   return transcript ?? '';
 }
 
-export async function clean(text: string): Promise<string> {
+export async function clean(
+  text: string,
+  options: {
+    dictionary?: Array<{ trigger: string; replacement: string }>;
+    vocabulary?: string[];
+  } = {}
+): Promise<string> {
   if (!text.trim()) return '';
+  const authHeader = await sessionAuthHeader();
   const res = await fetchApi('/clean', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    headers: { 'Content-Type': 'application/json', ...authHeader },
+    body: JSON.stringify({ text, ...options }),
   });
   if (!res.ok) {
     const t = await res.text();
@@ -54,6 +69,33 @@ export async function clean(text: string): Promise<string> {
   }
   const { cleaned } = (await res.json()) as { cleaned: string };
   return cleaned || text;
+}
+
+export async function getUsageSummary(): Promise<{
+  identity: { kind: string; label?: string; tag?: string; email?: string };
+  today: {
+    requests: number;
+    transcriptions: number;
+    cleanups: number;
+    errors: number;
+    audioBytes: number;
+  };
+  last30d: {
+    requests: number;
+    transcriptions: number;
+    cleanups: number;
+    errors: number;
+    audioBytes: number;
+  };
+} | null> {
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return null;
+  const res = await fetchApi('/usage', {
+    method: 'GET',
+    headers: authHeader,
+  });
+  if (!res.ok) return null;
+  return res.json();
 }
 
 export async function persistTranscript(payload: {
