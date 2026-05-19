@@ -1,5 +1,31 @@
 # hushly desktop app — strategy
 
+## Current lightweight Mac app
+
+The repo now includes a no-new-dependencies native macOS wrapper:
+
+```bash
+cd "/Users/jerel/CC Apps/hushly"
+scripts/build-macos-app.sh
+open dist/macos/Hushly.app
+```
+
+What it is:
+- 104 KB `.app` bundle on Apple Silicon because it uses system AppKit/WebKit instead of Electron.
+- Menu-bar/floating window app that loads `https://hushly-six.vercel.app`.
+- Requests microphone access through the native app bundle.
+- `Control + Option + Space` brings the Hushly window forward.
+- Output still follows the current Hushly behavior: clean text is copied, then you paste where needed.
+
+What it is not yet:
+- It does not silently insert text into the frontmost app like Wispr Flow. That requires the Accessibility API + a native paste/type bridge, which is the next native layer.
+- It is ad-hoc signed for local use, not notarized for distribution.
+
+Source files:
+- `desktop/macos/HushlyLite.swift`
+- `desktop/macos/Info.plist`
+- `scripts/build-macos-app.sh`
+
 You asked about turning the web app into a desktop app. Three real paths, ranked by fit for a dictation tool that needs a global hotkey + the ability to insert text into the active text field of any other app:
 
 ## 1. Tauri (recommended)

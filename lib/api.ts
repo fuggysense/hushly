@@ -17,8 +17,18 @@ export function getApiBase(): string {
   return '';
 }
 
+async function fetchApi(path: string, init: RequestInit): Promise<Response> {
+  const url = `${getApiBase()}${path}`;
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`network ${path} failed at ${url || path}: ${message}`);
+  }
+}
+
 export async function transcribe(body: BodyInit, contentType: string): Promise<string> {
-  const res = await fetch(`${getApiBase()}/transcribe`, {
+  const res = await fetchApi('/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': contentType },
     body,
@@ -33,7 +43,7 @@ export async function transcribe(body: BodyInit, contentType: string): Promise<s
 
 export async function clean(text: string): Promise<string> {
   if (!text.trim()) return '';
-  const res = await fetch(`${getApiBase()}/clean`, {
+  const res = await fetchApi('/clean', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -57,7 +67,7 @@ export async function persistTranscript(payload: {
     data: { session },
   } = await supabase.auth.getSession();
   if (!session) return null;
-  const res = await fetch(`${getApiBase()}/persist`, {
+  const res = await fetchApi('/persist', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -131,7 +141,7 @@ export async function retryTranscript(
     data: { session },
   } = await supabase.auth.getSession();
   if (!session) return null;
-  const res = await fetch(`${getApiBase()}/retry`, {
+  const res = await fetchApi('/retry', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
