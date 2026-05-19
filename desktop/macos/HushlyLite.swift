@@ -16,7 +16,7 @@ struct HushlyLiteApp {
   }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, @unchecked Sendable {
   private var tabletPanel: NSPanel!
   private var tabletView: TabletView!
   private var statusLabel: NSTextField!
@@ -30,7 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var apiBaseField: NSTextField?
   private var mainStatusLabel: NSTextField?
   private var accessibilityStatusLabel: NSTextField?
+  private var tabControl: NSSegmentedControl?
+  private var settingsPane: NSView?
+  private var historyPane: NSView?
   private var historyTable: NSTableView?
+  private var historyDetailText: NSTextView?
+  private var historyStorageLabel: NSTextField?
+  private var historyActionStatusLabel: NSTextField?
+  private var copyHistoryButton: NSButton?
+  private var retryHistoryButton: NSButton?
   private var historyItems: [TranscriptEntry] = []
   private var hotKeyRef: EventHotKeyRef?
   private var escapeHotKeyRef: EventHotKeyRef?
@@ -96,6 +104,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       apiBaseField = nil
       mainStatusLabel = nil
       accessibilityStatusLabel = nil
+      tabControl = nil
+      settingsPane = nil
+      historyPane = nil
+      historyTable = nil
+      historyDetailText = nil
+      historyStorageLabel = nil
+      historyActionStatusLabel = nil
+      copyHistoryButton = nil
+      retryHistoryButton = nil
     } else if notification.object as? NSWindow === shortcutCaptureWindow {
       removeShortcutCaptureMonitor()
       shortcutCaptureWindow = nil
@@ -358,9 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         audioPath: savedURL.path,
         status: "Saved for retry"
       )
-      historyItems.insert(entry, at: 0)
-      TranscriptStore.shared.save(historyItems)
-      historyTable?.reloadData()
+      insertHistoryEntry(entry)
       setStatus("Saved for retry")
     } catch {
       setStatus("Cancel save failed")
@@ -390,10 +405,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         setStatus("Cleanup unavailable; pasting raw.")
       }
 
+      let savedURL = try? TranscriptStore.shared.storeAudio(fileURL)
+      insertHistoryEntry(
+        TranscriptEntry(
+          id: UUID().uuidString,
+          createdAt: Date(),
+          rawText: transcript,
+          cleanedText: finalText,
+          audioPath: savedURL?.path,
+          status: "Complete"
+        )
+      )
       paste(finalText)
     } catch {
       setStatus(error.localizedDescription)
       hideTablet(after: 2.0)
+    }
+  }
+
+  private func insertHistoryEntry(_ entry: TranscriptEntry) {
+    DispatchQueue.main.async {
+      self.historyItems.insert(entry, at: 0)
+      TranscriptStore.shared.save(self.historyItems)
+      self.refreshHistoryUI()
     }
   }
 
@@ -528,8 +562,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func buildSettingsWindow() {
+    let width: CGFloat = 620
+    let height: CGFloat = 520
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 430, height: 282),
+      contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
@@ -539,38 +575,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     window.isRestorable = false
     window.delegate = self
 
-    let content = NSView(frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 430, height: 282))
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 
+    let tabs = NSSegmentedControl(labels: ["Settings", "History"], trackingMode: .selectOne, target: self, action: #selector(switchMainPane))
+    tabs.frame = NSRect(x: 24, y: height - 48, width: 220, height: 28)
+    tabs.selectedSegment = 0
+    content.addSubview(tabs)
+    tabControl = tabs
+
+    let paneFrame = NSRect(x: 0, y: 0, width: width, height: height - 64)
+    let settingsPane = buildSettingsPane(frame: paneFrame)
+    let historyPane = buildHistoryPane(frame: paneFrame)
+    historyPane.isHidden = true
+
+    content.addSubview(settingsPane)
+    content.addSubview(historyPane)
+    self.settingsPane = settingsPane
+    self.historyPane = historyPane
+
+    window.contentView = content
+    settingsWindow = window
+    refreshSettingsFields()
+    refreshHistoryUI()
+  }
+
+  private func buildSettingsPane(frame: NSRect) -> NSView {
+    let content = NSView(frame: frame)
     let textLabel = NSTextField(labelWithString: "Tablet text")
-    textLabel.frame = NSRect(x: 24, y: 220, width: 110, height: 18)
+    textLabel.frame = NSRect(x: 32, y: 376, width: 120, height: 18)
     content.addSubview(textLabel)
 
     let textField = NSTextField(string: Preferences.shared.tabletText)
-    textField.frame = NSRect(x: 146, y: 214, width: 248, height: 28)
+    textField.frame = NSRect(x: 168, y: 370, width: 396, height: 30)
     content.addSubview(textField)
     tabletTextField = textField
 
     let shortcutLabel = NSTextField(labelWithString: "Shortcut")
-    shortcutLabel.frame = NSRect(x: 24, y: 172, width: 110, height: 18)
+    shortcutLabel.frame = NSRect(x: 32, y: 318, width: 120, height: 18)
     content.addSubview(shortcutLabel)
 
     let shortcutButton = NSButton(title: Preferences.shared.shortcut.title, target: self, action: #selector(beginShortcutCapture))
-    shortcutButton.frame = NSRect(x: 146, y: 166, width: 248, height: 30)
+    shortcutButton.frame = NSRect(x: 168, y: 312, width: 396, height: 32)
     shortcutButton.bezelStyle = .rounded
     content.addSubview(shortcutButton)
     self.shortcutButton = shortcutButton
 
     let apiLabel = NSTextField(labelWithString: "API base")
-    apiLabel.frame = NSRect(x: 24, y: 124, width: 110, height: 18)
+    apiLabel.frame = NSRect(x: 32, y: 260, width: 120, height: 18)
     content.addSubview(apiLabel)
 
     let apiField = NSTextField(string: Preferences.shared.apiBase)
-    apiField.frame = NSRect(x: 146, y: 118, width: 248, height: 28)
+    apiField.frame = NSRect(x: 168, y: 254, width: 396, height: 30)
     content.addSubview(apiField)
     apiBaseField = apiField
 
     let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
-    accessStatus.frame = NSRect(x: 24, y: 82, width: 370, height: 18)
+    accessStatus.frame = NSRect(x: 32, y: 206, width: 532, height: 18)
     accessStatus.textColor = NSColor.secondaryLabelColor
     accessStatus.font = NSFont.systemFont(ofSize: 11)
     accessStatus.lineBreakMode = .byTruncatingTail
@@ -579,7 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     accessibilityStatusLabel = accessStatus
 
     let mainStatus = NSTextField(labelWithString: "Ready: \(Preferences.shared.shortcut.title)")
-    mainStatus.frame = NSRect(x: 24, y: 50, width: 370, height: 18)
+    mainStatus.frame = NSRect(x: 32, y: 174, width: 532, height: 18)
     mainStatus.textColor = NSColor.secondaryLabelColor
     mainStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
     mainStatus.lineBreakMode = .byTruncatingTail
@@ -588,18 +648,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     mainStatusLabel = mainStatus
 
     let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
-    dictateButton.frame = NSRect(x: 190, y: 16, width: 94, height: 30)
+    dictateButton.frame = NSRect(x: 360, y: 112, width: 96, height: 32)
     dictateButton.bezelStyle = .rounded
     content.addSubview(dictateButton)
 
     let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
-    saveButton.frame = NSRect(x: 300, y: 16, width: 94, height: 30)
+    saveButton.frame = NSRect(x: 468, y: 112, width: 96, height: 32)
     saveButton.bezelStyle = .rounded
     content.addSubview(saveButton)
 
-    window.contentView = content
-    settingsWindow = window
-    refreshSettingsFields()
+    return content
+  }
+
+  private func buildHistoryPane(frame: NSRect) -> NSView {
+    let content = NSView(frame: frame)
+
+    let storageLabel = NSTextField(labelWithString: historyStorageText())
+    storageLabel.frame = NSRect(x: 24, y: 404, width: 572, height: 18)
+    storageLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+    storageLabel.textColor = NSColor.secondaryLabelColor
+    storageLabel.lineBreakMode = .byTruncatingMiddle
+    content.addSubview(storageLabel)
+    historyStorageLabel = storageLabel
+
+    let scrollView = NSScrollView(frame: NSRect(x: 24, y: 164, width: 572, height: 224))
+    scrollView.borderType = .bezelBorder
+    scrollView.hasVerticalScroller = true
+
+    let table = NSTableView(frame: scrollView.bounds)
+    table.headerView = nil
+    table.rowHeight = 34
+    table.intercellSpacing = NSSize(width: 8, height: 4)
+    table.delegate = self
+    table.dataSource = self
+    table.usesAlternatingRowBackgroundColors = false
+    table.allowsMultipleSelection = false
+    addHistoryColumn(to: table, id: "date", title: "Date", width: 126)
+    addHistoryColumn(to: table, id: "status", title: "Status", width: 104)
+    addHistoryColumn(to: table, id: "text", title: "Transcript", width: 326)
+    scrollView.documentView = table
+    content.addSubview(scrollView)
+    historyTable = table
+
+    let detailScroll = NSScrollView(frame: NSRect(x: 24, y: 70, width: 572, height: 78))
+    detailScroll.borderType = .bezelBorder
+    detailScroll.hasVerticalScroller = true
+    let detail = NSTextView(frame: detailScroll.bounds)
+    detail.isEditable = false
+    detail.isSelectable = true
+    detail.drawsBackground = false
+    detail.font = NSFont.systemFont(ofSize: 12)
+    detail.textColor = NSColor.labelColor
+    detail.textContainerInset = NSSize(width: 8, height: 8)
+    detailScroll.documentView = detail
+    content.addSubview(detailScroll)
+    historyDetailText = detail
+
+    let actionStatus = NSTextField(labelWithString: "")
+    actionStatus.frame = NSRect(x: 24, y: 30, width: 308, height: 18)
+    actionStatus.font = NSFont.systemFont(ofSize: 11)
+    actionStatus.textColor = NSColor.secondaryLabelColor
+    actionStatus.lineBreakMode = .byTruncatingTail
+    content.addSubview(actionStatus)
+    historyActionStatusLabel = actionStatus
+
+    let copyButton = NSButton(title: "Copy", target: self, action: #selector(copySelectedHistory))
+    copyButton.frame = NSRect(x: 372, y: 24, width: 92, height: 30)
+    copyButton.bezelStyle = .rounded
+    content.addSubview(copyButton)
+    copyHistoryButton = copyButton
+
+    let retryButton = NSButton(title: "Retry", target: self, action: #selector(retrySelectedHistory))
+    retryButton.frame = NSRect(x: 480, y: 24, width: 92, height: 30)
+    retryButton.bezelStyle = .rounded
+    content.addSubview(retryButton)
+    retryHistoryButton = retryButton
+
+    return content
+  }
+
+  private func addHistoryColumn(to table: NSTableView, id: String, title: String, width: CGFloat) {
+    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
+    column.title = title
+    column.width = width
+    column.minWidth = width
+    table.addTableColumn(column)
+  }
+
+  @objc private func switchMainPane() {
+    let showingHistory = tabControl?.selectedSegment == 1
+    settingsPane?.isHidden = showingHistory
+    historyPane?.isHidden = !showingHistory
+    if showingHistory {
+      refreshHistoryUI()
+    }
   }
 
   private func refreshSettingsFields() {
@@ -607,6 +749,162 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     apiBaseField?.stringValue = Preferences.shared.apiBase
     shortcutButton?.title = Preferences.shared.shortcut.title
     refreshAccessibilityStatus()
+  }
+
+  private func refreshHistoryUI() {
+    historyStorageLabel?.stringValue = historyStorageText()
+    let selectedRow = historyTable?.selectedRow ?? -1
+    historyTable?.reloadData()
+
+    if historyItems.isEmpty {
+      historyTable?.deselectAll(nil)
+    } else if selectedRow >= 0 && selectedRow < historyItems.count {
+      historyTable?.selectRowIndexes(IndexSet(integer: selectedRow), byExtendingSelection: false)
+    } else if historyTable?.selectedRow == -1 {
+      historyTable?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
+
+    refreshHistoryDetail()
+  }
+
+  private func refreshHistoryDetail() {
+    guard let index = selectedHistoryIndex() else {
+      historyDetailText?.string = "No transcripts saved on this Mac yet."
+      copyHistoryButton?.isEnabled = false
+      retryHistoryButton?.isEnabled = false
+      return
+    }
+
+    let entry = historyItems[index]
+    historyDetailText?.string = displayText(for: entry)
+    copyHistoryButton?.isEnabled = transcriptText(for: entry) != nil
+    retryHistoryButton?.isEnabled = entry.audioPath != nil
+  }
+
+  private func selectedHistoryIndex() -> Int? {
+    guard let row = historyTable?.selectedRow, row >= 0, row < historyItems.count else {
+      return nil
+    }
+    return row
+  }
+
+  private func displayText(for entry: TranscriptEntry) -> String {
+    transcriptText(for: entry) ?? (entry.audioPath == nil ? "" : "(audio saved for retry)")
+  }
+
+  private func transcriptText(for entry: TranscriptEntry) -> String? {
+    let cleaned = entry.cleanedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !cleaned.isEmpty { return cleaned }
+    let raw = entry.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return raw.isEmpty ? nil : raw
+  }
+
+  private func historyStorageText() -> String {
+    "Storage: local on this Mac. Supabase sync: not connected in the desktop app."
+  }
+
+  private func formatHistoryDate(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .short
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+  }
+
+  @objc private func copySelectedHistory() {
+    guard let index = selectedHistoryIndex() else { return }
+    guard let text = transcriptText(for: historyItems[index]) else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    historyActionStatusLabel?.stringValue = "Copied"
+  }
+
+  @objc private func retrySelectedHistory() {
+    guard let index = selectedHistoryIndex() else { return }
+    let entry = historyItems[index]
+    guard let audioPath = entry.audioPath else {
+      historyActionStatusLabel?.stringValue = "No audio saved for retry"
+      return
+    }
+
+    let fileURL = URL(fileURLWithPath: audioPath)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+      historyActionStatusLabel?.stringValue = "Audio file is missing"
+      return
+    }
+
+    retryHistoryButton?.isEnabled = false
+    historyActionStatusLabel?.stringValue = "Retrying..."
+    Task { [weak self] in
+      await self?.retryHistoryEntry(id: entry.id, fileURL: fileURL)
+    }
+  }
+
+  private func retryHistoryEntry(id: String, fileURL: URL) async {
+    do {
+      let transcript = try await transcribe(fileURL: fileURL)
+      guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw HushlyError.api("No speech detected.")
+      }
+
+      let finalText: String
+      do {
+        finalText = try await clean(transcript: transcript)
+      } catch {
+        finalText = transcript
+      }
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self, let index = self.historyItems.firstIndex(where: { $0.id == id }) else { return }
+        self.historyItems[index].rawText = transcript
+        self.historyItems[index].cleanedText = finalText
+        self.historyItems[index].status = "Complete"
+        TranscriptStore.shared.save(self.historyItems)
+        self.refreshHistoryUI()
+        if let row = self.historyItems.firstIndex(where: { $0.id == id }) {
+          self.historyTable?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        self.historyActionStatusLabel?.stringValue = "Retry complete"
+      }
+    } catch {
+      let message = error.localizedDescription
+      DispatchQueue.main.async { [weak self] in
+        self?.retryHistoryButton?.isEnabled = true
+        self?.historyActionStatusLabel?.stringValue = message
+      }
+    }
+  }
+
+  func numberOfRows(in tableView: NSTableView) -> Int {
+    historyItems.count
+  }
+
+  func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+    guard row >= 0, row < historyItems.count else { return nil }
+    let columnID = tableColumn?.identifier.rawValue ?? "text"
+    let cellID = NSUserInterfaceItemIdentifier("history-\(columnID)")
+    let label = tableView.makeView(withIdentifier: cellID, owner: self) as? NSTextField ?? NSTextField(labelWithString: "")
+    label.identifier = cellID
+    label.frame = NSRect(x: 4, y: 0, width: max(40, (tableColumn?.width ?? 200) - 8), height: tableView.rowHeight)
+    label.autoresizingMask = [.width, .height]
+    label.lineBreakMode = .byTruncatingTail
+    label.maximumNumberOfLines = 1
+
+    let entry = historyItems[row]
+    switch columnID {
+    case "date":
+      label.stringValue = formatHistoryDate(entry.createdAt)
+    case "status":
+      label.stringValue = entry.status
+    default:
+      label.stringValue = displayText(for: entry)
+    }
+    label.textColor = columnID == "status" ? NSColor.secondaryLabelColor : NSColor.labelColor
+    label.font = NSFont.systemFont(ofSize: 12)
+    return label
+  }
+
+  func tableViewSelectionDidChange(_ notification: Notification) {
+    refreshHistoryDetail()
   }
 
   @objc private func beginShortcutCapture() {
