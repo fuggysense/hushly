@@ -27,11 +27,17 @@ import {
 } from 'expo-audio';
 import { File } from 'expo-file-system';
 import { Link } from 'expo-router';
+import { Pill } from '@/components/Pill';
+import { StatusEyebrow } from '@/components/StatusEyebrow';
+import { TranscriptCard } from '@/components/TranscriptCard';
+import { Waveform } from '@/components/Waveform';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { finalizeAndCopy, persistTranscript, transcribe, uploadAudio } from '@/lib/api';
 import { useButtonSettings } from '@/lib/settings';
 import { C } from '@/lib/tokens';
+
+const showPrimitiveSmoke = false;
 
 type Phase = 'idle' | 'recording' | 'finalizing' | 'done' | 'error';
 type StatusTone = 'idle' | 'live' | 'work' | 'ok' | 'err';
@@ -297,6 +303,15 @@ export default function Home() {
 
   return (
     <View style={styles.wrap}>
+      {showPrimitiveSmoke ? (
+        <View style={styles.primitiveSmoke} pointerEvents="none">
+          <StatusEyebrow label="Ready" tone="idle" />
+          <Pill center={<Waveform active={false} />} />
+          <TranscriptCard>
+            <Text style={styles.primitiveSmokeText}>Primitive smoke</Text>
+          </TranscriptCard>
+        </View>
+      ) : null}
       <View style={styles.header}>
         <Text style={styles.brand} accessibilityRole="header">
           hushly
@@ -493,6 +508,8 @@ function formatMs(ms: number) {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: C.bg, paddingTop: 60, paddingBottom: 40 },
+  primitiveSmoke: { display: 'none' },
+  primitiveSmokeText: { color: C.textPrimary, fontFamily: 'Inter-Regular', fontSize: 15 },
 
   header: {
     paddingHorizontal: 24,
