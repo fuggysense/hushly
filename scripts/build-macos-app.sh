@@ -15,11 +15,14 @@ swiftc \
   -parse-as-library \
   "$ROOT/desktop/macos/HushlyLite.swift" \
   -framework Cocoa \
-  -framework WebKit \
+  -framework ApplicationServices \
+  -framework AVFoundation \
+  -framework AudioToolbox \
   -Osize \
   -o "$MACOS_DIR/HushlyLite"
 
 cp "$ROOT/desktop/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "$ROOT/desktop/macos/Assets/tablet-glow.png" "$RESOURCES_DIR/tablet-glow.png"
 
 if command -v codesign >/dev/null 2>&1; then
   codesign --force --deep --sign - "$APP_DIR" >/dev/null

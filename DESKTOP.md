@@ -1,8 +1,6 @@
-# hushly desktop app — strategy
+# hushly desktop app
 
-## Current lightweight Mac app
-
-The repo now includes a no-new-dependencies native macOS wrapper:
+The repo includes a no-new-dependencies native macOS dictation app:
 
 ```bash
 cd "/Users/jerel/CC Apps/hushly"
@@ -10,73 +8,25 @@ scripts/build-macos-app.sh
 open dist/macos/Hushly.app
 ```
 
-Keep the local web server running while using this local build:
+What it does:
+- Runs as a small menu-bar app with a draggable glowing tablet overlay.
+- Uses a configurable global hotkey to start and stop dictation.
+- Records with AVFoundation, sends audio to Hushly's `/transcribe` endpoint, cleans it with `/clean`, then pastes into the app that was focused when dictation started.
+- Plays a short system sound on start and stop.
+- Lets you edit the tablet text, shortcut, and API base from **Settings**.
+- Copies the final text to the clipboard even if macOS Accessibility permission is not granted.
 
-```bash
-CI=1 npx expo start --web --port 8083
-```
+Default settings:
+- Shortcut: `Control + Option + Space`
+- Tablet text: `$10k/month`
+- API base: `https://hushly-six.vercel.app`
 
-What it is:
-- 104 KB `.app` bundle on Apple Silicon because it uses system AppKit/WebKit instead of Electron.
-- Menu-bar window app that loads the local Expo dev server at `http://localhost:8083`.
-- Normal macOS window level; it can be moved by dragging the background/title area.
-- Requests microphone access through the native app bundle.
-- `Control + Option + Space` brings the Hushly window forward.
-- Output still follows the current Hushly behavior: clean text is copied, then you paste where needed.
-
-What it is not yet:
-- It does not silently insert text into the frontmost app like Wispr Flow. That requires the Accessibility API + a native paste/type bridge, which is the next native layer.
-- It is ad-hoc signed for local use, not notarized for distribution.
+Permissions:
+- Microphone permission is required to record.
+- Accessibility permission is required for automatic paste into other apps. Without it, Hushly still copies the final text to the clipboard.
 
 Source files:
 - `desktop/macos/HushlyLite.swift`
 - `desktop/macos/Info.plist`
+- `desktop/macos/Assets/tablet-glow.png`
 - `scripts/build-macos-app.sh`
-
-You asked about turning the web app into a desktop app. Three real paths, ranked by fit for a dictation tool that needs a global hotkey + the ability to insert text into the active text field of any other app:
-
-## 1. Tauri (recommended)
-
-Native, tiny binary (~6MB), uses the OS's webview so we just point it at our Expo Web bundle. Critical wins for hushly:
-
-- **Global system hotkey** via `tauri-plugin-global-shortcut` — press `⌃⌥Space` from anywhere to start recording.
-- **macOS Accessibility API** via a small Swift sidecar (or `enigo` Rust crate) to type the cleaned text into the **frontmost app's text field** — the same UX as Wispr Flow / Superwhisper on Mac.
-- **Menubar app** via `tauri-plugin-positioner` — small icon, no Dock presence.
-- **App distribution** is a notarized `.app` you can drop on a download page; no App Store needed.
-- **Auto-update** via `tauri-plugin-updater`.
-
-Build:
-```bash
-cd "/Users/jerel/CC Apps/hushly"
-# Add Tauri to the existing Expo project
-npm install --save-dev @tauri-apps/cli @tauri-apps/api
-npx tauri init   # answers: dev URL = http://localhost:8081, dist dir = dist/client
-npm install tauri-plugin-global-shortcut-api
-npx tauri dev    # builds and launches the native window
-```
-
-Then write the Rust glue in `src-tauri/src/main.rs` to:
-1. Register the global hotkey.
-2. On hotkey: bring the hushly window to front OR record silently.
-3. After /clean returns: paste into frontmost app via `enigo::Enigo::text(&cleaned)` (cross-platform) OR a macOS-specific `CGEventKeyboardSetUnicodeString` for reliability.
-
-~1 day of work to ship a working menubar dictation app.
-
-## 2. Electron
-
-Heavier (~150MB), slower startup, more memory. The Wispr Flow / Superwhisper desktop apps are Electron. Same capabilities as Tauri but heavier. Pick this only if you already know Electron well.
-
-## 3. PWA (install from browser)
-
-Simplest. Open https://hushly-six.vercel.app in Chrome/Edge → "Install hushly". Becomes a standalone window. **But:**
-- No global hotkey outside the app window.
-- No text injection into other apps' fields — only clipboard hop.
-- Clipboard requires the window to be focused.
-
-Use this as Day-1 shipping, then build Tauri for Day-30. Most users won't switch from Cmd-V to a hotkey-driven Tauri app until they're already addicted to the workflow.
-
-## Recommended path
-
-**Ship the PWA first** (literally just add `manifest.json` to `dist/client/`, takes 30 min). **Build Tauri after the keyboard extension** because Tauri reuses your existing Vercel + Supabase + Deepgram + Haiku stack — no API changes needed, just a thin native shell.
-
-The keyboard extension and the Tauri desktop app are independent products that share the same backend.
