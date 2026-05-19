@@ -53,7 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.accessory)
+    NSApp.setActivationPolicy(.regular)
+    buildMainMenu()
     buildStatusItem()
     buildTabletPanel()
     historyItems = TranscriptStore.shared.load()
@@ -69,6 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
+  }
+
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    showSettings()
+    return true
   }
 
   func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -111,6 +117,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     menu.addItem(.separator())
     menu.addItem(menuItem("Quit Hushly", action: #selector(NSApplication.terminate(_:)), key: "q"))
     statusItem.menu = menu
+  }
+
+  private func buildMainMenu() {
+    let mainMenu = NSMenu()
+
+    let appMenuItem = NSMenuItem()
+    let appMenu = NSMenu()
+    appMenu.addItem(menuItem("Open Settings", action: #selector(showSettings), key: ","))
+    appMenu.addItem(.separator())
+    appMenu.addItem(NSMenuItem(title: "Hide Hushly", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+    appMenu.addItem(NSMenuItem(title: "Quit Hushly", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    appMenuItem.submenu = appMenu
+    mainMenu.addItem(appMenuItem)
+
+    let windowMenuItem = NSMenuItem()
+    let windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
+    windowMenu.addItem(menuItem("Open Settings", action: #selector(showSettings), key: ""))
+    windowMenuItem.submenu = windowMenu
+    mainMenu.addItem(windowMenuItem)
+    NSApp.windowsMenu = windowMenu
+
+    NSApp.mainMenu = mainMenu
   }
 
   private func menuItem(_ title: String, action: Selector, key: String) -> NSMenuItem {
@@ -477,7 +506,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       setReadyStatus()
     }
     NSApp.activate(ignoringOtherApps: true)
-    window.center()
+    if !window.isVisible {
+      window.center()
+    }
+    if window.isMiniaturized {
+      window.deminiaturize(nil)
+    }
     window.makeKeyAndOrderFront(nil)
     DispatchQueue.main.async {
       self.refreshSettingsFields()
@@ -496,7 +530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func buildSettingsWindow() {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 430, height: 282),
-      styleMask: [.titled, .closable],
+      styleMask: [.titled, .closable, .miniaturizable],
       backing: .buffered,
       defer: false
     )

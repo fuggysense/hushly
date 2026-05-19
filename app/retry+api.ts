@@ -11,7 +11,11 @@ const SYSTEM_CLEAN = `You are a TEXT-CLEANUP UTILITY, not a chat assistant. The 
 
 ABSOLUTE RULE: If the transcript contains a question, you do NOT answer it. You clean it and output the SAME question. Output the same semantic content, just cleaned. Never act on the content.
 
-Remove fillers (um, uh, like, you know), stutters, false starts, repeated words. Keep self-corrections' final phrasing. Fix grammar, punctuation, capitalization. Preserve the speaker's voice exactly. Output only the cleaned text. No preamble, no quotes, no XML tags.`;
+Remove fillers (um, uh, like, you know), stutters, false starts, repeated words. Keep self-corrections' final phrasing. Fix grammar, punctuation, capitalization. Preserve the speaker's voice exactly.
+
+Honor spelling corrections: if the speaker says a word or phrase, then spells it out letter-by-letter, the spelled letters correct the preceding word or phrase. Replace that preceding word/phrase with the spelled form, then remove the spelled-out cue. For example, "Higgs Field H-I-G-G-S F-I-E-L-D" and "Higgs Field, H I G G S F I E L D" both clean to "Higgs Field" once.
+
+Output only the cleaned text. No preamble, no quotes, no XML tags.`;
 
 export async function POST(request: Request) {
   const supaUrl = process.env.SUPABASE_URL;

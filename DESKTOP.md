@@ -9,7 +9,9 @@ open dist/macos/Hushly.app
 ```
 
 What it does:
-- Runs as a small menu-bar app with a normal settings/control window.
+- Runs as a small native Mac app with a Dock icon, a normal settings/control window, and a menu-bar helper.
+- Opens settings from the Dock icon, the app menu, or the menu-bar helper.
+- The settings window can be minimized like a normal Mac window.
 - Shows a much smaller draggable glowing tablet overlay only while dictating.
 - Uses a configurable global hotkey to start and stop dictation. Click the shortcut control and press the key combo you want.
 - Records with AVFoundation, sends audio to Hushly's `/transcribe` endpoint, cleans it with `/clean`, then pastes into the app that was focused when dictation started.
