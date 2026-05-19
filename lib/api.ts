@@ -90,7 +90,7 @@ export async function getUsageSummary(): Promise<{
 } | null> {
   const authHeader = await sessionAuthHeader();
   if (!authHeader.Authorization) return null;
-  const res = await fetchApi('/usage', {
+  const res = await fetchApi('/usage-summary', {
     method: 'GET',
     headers: authHeader,
   });

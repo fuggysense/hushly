@@ -10,11 +10,19 @@ type UsageSummary = NonNullable<Awaited<ReturnType<typeof getUsageSummary>>>;
 export default function Usage() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
-    setUsage(await getUsageSummary());
-    setLoading(false);
+    setError('');
+    try {
+      setUsage(await getUsageSummary());
+    } catch (e) {
+      setUsage(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -56,6 +64,8 @@ export default function Usage() {
               <Text style={styles.line}>{byteString(usage.last30d.audioBytes)} audio uploaded</Text>
             </TranscriptCard>
           </>
+        ) : error ? (
+          <Text style={styles.line}>{error}</Text>
         ) : (
           <Text style={styles.line}>Usage is unavailable for this session.</Text>
         )}
