@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -36,8 +27,6 @@ import { supabase } from '@/lib/supabase';
 import { finalizeAndCopy, persistTranscript, transcribe, uploadAudio } from '@/lib/api';
 import { useButtonSettings } from '@/lib/settings';
 import { C } from '@/lib/tokens';
-
-const showPrimitiveSmoke = false;
 
 type Phase = 'idle' | 'recording' | 'finalizing' | 'done' | 'error';
 type StatusTone = 'idle' | 'live' | 'work' | 'ok' | 'err';
@@ -290,28 +279,19 @@ export default function Home() {
   const shortcutLabel =
     settings.shortcutKey === ' ' ? 'Space' : settings.shortcutKey.toUpperCase();
 
-  const status: { dotColor: string; label: string; tone: StatusTone } =
+  const status: { label: string; tone: StatusTone } =
     phase === 'recording'
-      ? { dotColor: C.accent, label: `Recording  ${formatMs(elapsedMs)}`, tone: 'live' }
+      ? { label: `Recording ${formatMs(elapsedMs)}`, tone: 'live' }
       : phase === 'finalizing'
-        ? { dotColor: C.accent, label: 'Transcribing + cleaning', tone: 'work' }
+        ? { label: 'Cleaning…', tone: 'work' }
         : phase === 'done'
-          ? { dotColor: C.success, label: 'Copied to clipboard', tone: 'ok' }
+          ? { label: 'Copied', tone: 'ok' }
           : phase === 'error'
-            ? { dotColor: C.accent, label: 'Error', tone: 'err' }
-            : { dotColor: C.textMuted, label: 'Ready', tone: 'idle' };
+            ? { label: 'Error', tone: 'err' }
+            : { label: 'Ready', tone: 'idle' };
 
   return (
     <View style={styles.wrap}>
-      {showPrimitiveSmoke ? (
-        <View style={styles.primitiveSmoke} pointerEvents="none">
-          <StatusEyebrow label="Ready" tone="idle" />
-          <Pill center={<Waveform active={false} />} />
-          <TranscriptCard>
-            <Text style={styles.primitiveSmokeText}>Primitive smoke</Text>
-          </TranscriptCard>
-        </View>
-      ) : null}
       <View style={styles.header}>
         <Text style={styles.brand} accessibilityRole="header">
           hushly
@@ -336,57 +316,103 @@ export default function Home() {
       <View style={styles.hairline} />
 
       <View style={styles.middle}>
-        <ScrollView
-          style={styles.transcriptBox}
-          contentContainerStyle={styles.transcriptContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {cleaned ? (
-            <Animated.View entering={FadeIn.duration(220)}>
-              <Text style={styles.eyebrow}>Cleaned · copied to clipboard</Text>
-              <Text style={styles.cleaned} selectable>
-                {cleaned}
-              </Text>
-              {raw && raw !== cleaned ? (
-                <>
-                  <Text style={[styles.eyebrow, styles.eyebrowSpaced]}>Raw</Text>
-                  <Text style={styles.partial} selectable>
-                    {raw}
-                  </Text>
-                </>
+        <ScrollView contentContainerStyle={styles.mainContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.recordStage}>
+            <StatusEyebrow label={status.label} tone={status.tone} />
+
+            <View style={styles.pillWrap}>
+              {phase === 'recording' ? (
+                <Animated.View style={[styles.pulseRing, pulseStyle]} pointerEvents="none" />
               ) : null}
-            </Animated.View>
-          ) : phase === 'recording' ? (
-            <View style={styles.centerState}>
-              <Text style={styles.recTimer}>{formatMs(elapsedMs)}</Text>
-              <Text style={styles.recHint}>
-                Tap Stop to transcribe · Cancel to discard
-                {isWeb ? ' · Esc to cancel' : ''}
-              </Text>
-            </View>
-          ) : phase === 'finalizing' ? (
-            <View style={styles.centerState}>
-              <ActivityIndicator color={C.accent} />
-              <Text style={styles.workingHint}>Transcribing + cleaning…</Text>
-            </View>
-          ) : (
-            <View style={styles.centerState}>
-              <View style={styles.glyphCircle}>
-                <View style={styles.glyphDot} />
-              </View>
-              {isWeb ? (
-                <View style={styles.inlineHint}>
-                  <Text style={styles.idleHint}>Press</Text>
-                  <View style={styles.kbd}>
-                    <Text style={styles.kbdText}>{shortcutLabel}</Text>
-                  </View>
-                  <Text style={styles.idleHint}>or tap below to start dictating</Text>
-                </View>
+
+              {phase === 'recording' ? (
+                <Pill
+                  left={
+                    <Pressable
+                      onPress={cancel}
+                      accessibilityRole="button"
+                      accessibilityLabel="Cancel recording"
+                      hitSlop={10}
+                      style={({ pressed }) => [styles.pillIconButton, pressed && styles.btnPressed]}
+                    >
+                      <Text style={styles.pillGlyph}>×</Text>
+                    </Pressable>
+                  }
+                  center={<Waveform active />}
+                  right={
+                    <Pressable
+                      onPress={stop}
+                      accessibilityRole="button"
+                      accessibilityLabel="Stop recording and transcribe"
+                      hitSlop={10}
+                      style={({ pressed }) => [styles.pillIconButton, pressed && styles.btnPressed]}
+                    >
+                      <Text style={styles.pillGlyph}>✓</Text>
+                    </Pressable>
+                  }
+                />
               ) : (
-                <Text style={styles.idleHint}>Tap below to start dictating</Text>
+                <Pressable
+                  onPress={toggle}
+                  disabled={phase === 'finalizing'}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    phase === 'finalizing'
+                      ? 'Transcribing and cleaning'
+                      : phase === 'done'
+                        ? 'Start a new recording'
+                        : settings.label
+                  }
+                  accessibilityState={{ disabled: phase === 'finalizing' }}
+                  style={({ pressed }) => [
+                    styles.pillPressable,
+                    pressed && styles.btnPressed,
+                    phase === 'finalizing' && styles.btnBusy,
+                  ]}
+                >
+                  <Pill center={<Waveform active={false} />} />
+                </Pressable>
               )}
             </View>
-          )}
+
+            {phase === 'recording' ? (
+              <Text style={styles.pillHint}>
+                Tap ✓ to transcribe · × to discard{isWeb ? ' · Esc cancels' : ''}
+              </Text>
+            ) : phase === 'finalizing' ? (
+              <Text style={styles.pillHint}>Transcribing + cleaning…</Text>
+            ) : isWeb ? (
+              <View style={styles.inlineHint}>
+                <Text style={styles.idleHint}>Press</Text>
+                <View style={styles.kbd}>
+                  <Text style={styles.kbdText}>{shortcutLabel}</Text>
+                </View>
+                <Text style={styles.idleHint}>or tap waveform to start</Text>
+              </View>
+            ) : (
+              <Text style={styles.idleHint}>Tap waveform to start dictating</Text>
+            )}
+          </View>
+
+          {cleaned ? (
+            <Animated.View entering={FadeIn.duration(220)} style={styles.transcriptReveal}>
+              <TranscriptCard>
+                <Text style={styles.eyebrow}>Cleaned · copied</Text>
+                <Text style={styles.cleaned} selectable>
+                  {cleaned}
+                </Text>
+                {raw && raw !== cleaned ? (
+                  <>
+                    <Text style={[styles.eyebrow, styles.eyebrowSpaced]}>Raw</Text>
+                    <Text style={styles.partial} selectable>
+                      {raw}
+                    </Text>
+                  </>
+                ) : null}
+              </TranscriptCard>
+            </Animated.View>
+          ) : null}
+
           {errMsg ? (
             <View style={styles.errRow}>
               <View style={styles.errDot} />
@@ -397,75 +423,6 @@ export default function Home() {
       </View>
 
       <View style={styles.footer}>
-        <View
-          style={[
-            styles.statusPill,
-            status.tone === 'live' && styles.statusPillLive,
-            status.tone === 'work' && styles.statusPillWork,
-            status.tone === 'ok' && styles.statusPillOk,
-            status.tone === 'err' && styles.statusPillErr,
-          ]}
-        >
-          <View style={[styles.statusDot, { backgroundColor: status.dotColor }]} />
-          <Text style={styles.statusText}>{status.label}</Text>
-        </View>
-
-        {phase === 'recording' ? (
-          <View style={styles.btnRow}>
-            <Pressable
-              onPress={cancel}
-              accessibilityRole="button"
-              accessibilityLabel="Cancel recording"
-              style={({ pressed }) => [styles.btnSecondary, pressed && styles.btnPressed]}
-            >
-              <Text style={styles.btnSecondaryText}>Cancel</Text>
-            </Pressable>
-            <View style={styles.recordWrap}>
-              <Animated.View style={[styles.pulseRing, pulseStyle]} pointerEvents="none" />
-              <Pressable
-                onPress={stop}
-                accessibilityRole="button"
-                accessibilityLabel="Stop recording and transcribe"
-                style={({ pressed }) => [
-                  styles.btn,
-                  styles.btnStop,
-                  pressed && styles.btnPressed,
-                ]}
-              >
-                <View style={styles.btnHighlight} pointerEvents="none" />
-                <Text style={styles.btnText}>Stop</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : (
-          <Pressable
-            onPress={toggle}
-            disabled={phase === 'finalizing'}
-            accessibilityRole="button"
-            accessibilityLabel={
-              phase === 'finalizing'
-                ? 'Transcribing'
-                : phase === 'done'
-                  ? 'Start a new recording'
-                  : 'Start recording'
-            }
-            accessibilityState={{ disabled: phase === 'finalizing' }}
-            style={({ pressed }) => [
-              styles.btn,
-              styles.btnPrimary,
-              pressed && styles.btnPressed,
-              phase === 'finalizing' && styles.btnBusy,
-            ]}
-          >
-            <View style={styles.btnHighlight} pointerEvents="none" />
-            {phase === 'finalizing' ? (
-              <ActivityIndicator color={C.textPrimary} />
-            ) : (
-              <Text style={styles.btnText}>{settings.label}</Text>
-            )}
-          </Pressable>
-        )}
-
         <View style={styles.metaRow}>
           {editingLabel ? (
             <>
@@ -508,8 +465,6 @@ function formatMs(ms: number) {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: C.bg, paddingTop: 60, paddingBottom: 40 },
-  primitiveSmoke: { display: 'none' },
-  primitiveSmokeText: { color: C.textPrimary, fontFamily: 'Inter-Regular', fontSize: 15 },
 
   header: {
     paddingHorizontal: 24,
@@ -558,15 +513,44 @@ const styles = StyleSheet.create({
   signOut: { color: C.textSecondary, fontFamily: 'Inter-Medium', fontSize: 12 },
   hairline: { height: 1, backgroundColor: C.hairline, marginHorizontal: 16 },
 
-  middle: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  transcriptBox: {
-    flex: 1,
-    backgroundColor: C.surface,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: C.hairline,
+  middle: { flex: 1 },
+  mainContent: {
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingTop: 46,
+    paddingBottom: 28,
+    alignItems: 'center',
   },
-  transcriptContent: { padding: 20, paddingBottom: 32, flexGrow: 1 },
+  recordStage: { width: '100%', alignItems: 'center', gap: 16, paddingVertical: 24 },
+  pillWrap: {
+    width: '100%',
+    minHeight: 82,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pillPressable: { width: '100%', alignItems: 'center' },
+  pillIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pillGlyph: {
+    color: C.textPrimary,
+    fontFamily: 'Inter-Light',
+    fontSize: 26,
+    lineHeight: 30,
+  },
+  pillHint: {
+    color: C.textTertiary,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 11,
+    letterSpacing: 0.55,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  transcriptReveal: { width: '100%', maxWidth: 680, marginTop: 10 },
   eyebrow: {
     color: C.textTertiary,
     fontFamily: 'JetBrainsMono-Regular',
@@ -579,28 +563,6 @@ const styles = StyleSheet.create({
   cleaned: { color: C.textPrimary, fontFamily: 'Inter-Regular', fontSize: 19, lineHeight: 28 },
   partial: { color: C.textSecondary, fontFamily: 'Inter-Regular', fontSize: 16, lineHeight: 26 },
 
-  centerState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    paddingVertical: 32,
-  },
-  glyphCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: C.elevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  glyphDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: C.textMuted,
-  },
   idleHint: { color: C.textTertiary, fontFamily: 'Inter-Regular', fontSize: 15, textAlign: 'center' },
   inlineHint: {
     flexDirection: 'row',
@@ -624,86 +586,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontVariant: ['tabular-nums'],
   },
-  recTimer: {
-    color: C.accent,
-    fontFamily: 'Inter-Light',
-    fontSize: 44,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -1,
-  },
-  recHint: { color: C.textTertiary, fontFamily: 'Inter-Regular', fontSize: 13, textAlign: 'center' },
-  workingHint: { color: C.textSecondary, fontFamily: 'Inter-Regular', fontSize: 15, marginTop: 6 },
-
   errRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 },
   errDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.accent },
   errText: { color: C.accent, fontFamily: 'Inter-Regular', fontSize: 13, flex: 1 },
 
-  footer: { alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 16 },
-
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: C.elevated,
-    borderWidth: 1,
-    borderColor: C.hairline,
-  },
-  statusPillLive: { backgroundColor: C.accentSoft, borderColor: 'transparent' },
-  statusPillWork: { backgroundColor: C.accentSoft, borderColor: 'transparent' },
-  statusPillOk: { backgroundColor: C.successSoft, borderColor: 'transparent' },
-  statusPillErr: { backgroundColor: C.accentSoft, borderColor: 'transparent' },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusText: {
-    color: C.textSecondary,
-    fontFamily: 'JetBrainsMono-Regular',
-    fontSize: 12,
-    fontVariant: ['tabular-nums'],
-  },
-
-  recordWrap: { alignItems: 'center', justifyContent: 'center' },
   pulseRing: {
     position: 'absolute',
-    width: 200,
-    height: 88,
-    borderRadius: 44,
+    width: 304,
+    height: 82,
+    borderRadius: 41,
     backgroundColor: C.accent,
   },
 
-  btn: {
-    height: 76,
-    borderRadius: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  btnPrimary: { width: 264, backgroundColor: C.accent },
-  btnStop: { width: 168, backgroundColor: C.accent },
-  btnSecondary: {
-    height: 76,
-    width: 108,
-    borderRadius: 38,
-    backgroundColor: C.elevated,
-    borderWidth: 1,
-    borderColor: C.hairline,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  footer: { alignItems: 'center', paddingHorizontal: 24, paddingTop: 6 },
   btnBusy: { opacity: 0.85 },
   btnPressed: { transform: [{ scale: 0.985 }], opacity: 0.92 },
-  btnHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '50%',
-    backgroundColor: C.hairline,
-  },
-  btnText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 17, letterSpacing: -0.1 },
-  btnSecondaryText: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 15 },
-  btnRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
 
   metaRow: {
     flexDirection: 'row',
