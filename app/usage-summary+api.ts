@@ -39,15 +39,18 @@ export async function GET(request: Request) {
   if (error) return jsonError(500, error.message);
 
   const rows = (data ?? []) as UsageRow[];
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  const todayStart = todayStartFromRequest(request);
 
-  return Response.json({
-    identity: identityPayload(auth.identity),
-    today: summarize(rows.filter((row: UsageRow) => new Date(row.created_at) >= todayStart)),
-    last30d: summarize(rows),
-    recent: rows.slice(0, 20),
-  });
+  return Response.json(
+    {
+      identity: identityPayload(auth.identity),
+      today: summarize(rows.filter((row: UsageRow) => new Date(row.created_at) >= todayStart)),
+      last30d: summarize(rows),
+      recent: rows.slice(0, 20),
+      updatedAt: new Date().toISOString(),
+    },
+    { headers: { 'Cache-Control': 'no-store' } }
+  );
 }
 
 function identityPayload(identity: RequestIdentity) {
@@ -56,12 +59,25 @@ function identityPayload(identity: RequestIdentity) {
       kind: identity.kind,
       label: identity.label,
       tag: identity.tag,
+      keyPrefix: identity.keyPrefix,
     };
   }
   return {
     kind: identity.kind,
     email: identity.email,
   };
+}
+
+function todayStartFromRequest(request: Request) {
+  const header = request.headers.get('x-hushly-today-start');
+  if (header) {
+    const date = new Date(header);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const fallback = new Date();
+  fallback.setHours(0, 0, 0, 0);
+  return fallback;
 }
 
 function summarize(rows: UsageRow[]) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -25,7 +25,10 @@ type UsageRow = {
   key?: { label: string; tag: string | null; key_prefix: string; status: string } | null;
 };
 
+const ADMIN_MASTER_KEY_STORAGE = 'hushly:admin-master-key';
+
 export default function Admin() {
+  const loadedStoredKey = useRef(false);
   const [masterKey, setMasterKey] = useState('');
   const [label, setLabel] = useState('');
   const [tag, setTag] = useState('');
@@ -34,13 +37,16 @@ export default function Admin() {
   const [keys, setKeys] = useState<APIKeyRow[]>([]);
   const [usage, setUsage] = useState<UsageRow[]>([]);
 
-  const callAdmin = async (body: Record<string, unknown>) => {
+  const callAdmin = useCallback(async (body: Record<string, unknown>, keyOverride?: string) => {
+    const adminKey = (keyOverride ?? masterKey).trim();
+    if (!adminKey) throw new Error('master key required');
+
     setStatus('Loading...');
     const res = await fetch('/admin-keys', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Hushly-Master-Key': masterKey,
+        'X-Hushly-Master-Key': adminKey,
       },
       body: JSON.stringify(body),
     });
@@ -48,15 +54,59 @@ export default function Admin() {
     if (!res.ok) throw new Error(json.error ?? `admin ${res.status}`);
     setStatus('Ready');
     return json;
-  };
+  }, [masterKey]);
 
-  const listKeys = async () => {
+  const listKeys = useCallback(async (keyOverride?: string) => {
     try {
-      const json = await callAdmin({ action: 'list' });
+      const json = await callAdmin({ action: 'list' }, keyOverride);
       setKeys(json.keys ?? []);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
+  }, [callAdmin]);
+
+  const loadUsage = useCallback(async (keyOverride?: string) => {
+    try {
+      const json = await callAdmin({ action: 'usage', days: 30 }, keyOverride);
+      setUsage(json.summary ?? []);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
+    }
+  }, [callAdmin]);
+
+  const refreshAdmin = useCallback(async (keyOverride?: string) => {
+    await listKeys(keyOverride);
+    await loadUsage(keyOverride);
+  }, [listKeys, loadUsage]);
+
+  useEffect(() => {
+    if (loadedStoredKey.current || typeof window === 'undefined') return;
+    loadedStoredKey.current = true;
+    const stored = window.localStorage.getItem(ADMIN_MASTER_KEY_STORAGE);
+    if (!stored) return;
+    setMasterKey(stored);
+    void refreshAdmin(stored);
+  }, [refreshAdmin]);
+
+  const updateMasterKey = (value: string) => {
+    setMasterKey(value);
+    if (typeof window === 'undefined') return;
+    if (value.trim()) {
+      window.localStorage.setItem(ADMIN_MASTER_KEY_STORAGE, value);
+    } else {
+      window.localStorage.removeItem(ADMIN_MASTER_KEY_STORAGE);
+    }
+  };
+
+  const forgetMasterKey = () => {
+    setMasterKey('');
+    setKeys([]);
+    setUsage([]);
+    setCreatedKey('');
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(ADMIN_MASTER_KEY_STORAGE);
+    }
+    setStatus('Master key forgotten on this browser.');
   };
 
   const createKey = async () => {
@@ -65,7 +115,7 @@ export default function Admin() {
       const json = await callAdmin({ action: 'create', label, tag });
       setCreatedKey(json.key ?? '');
       setLabel('');
-      await listKeys();
+      await refreshAdmin();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
@@ -80,16 +130,16 @@ export default function Admin() {
   const revokeKey = async (id: string) => {
     try {
       await callAdmin({ action: 'revoke', id });
-      await listKeys();
+      await refreshAdmin();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const loadUsage = async () => {
+  const deleteKey = async (id: string) => {
     try {
-      const json = await callAdmin({ action: 'usage', days: 30 });
-      setUsage(json.summary ?? []);
+      await callAdmin({ action: 'delete', id });
+      await refreshAdmin();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
@@ -110,12 +160,20 @@ export default function Admin() {
           <Text style={styles.eyebrow}>Master key</Text>
           <TextInput
             value={masterKey}
-            onChangeText={setMasterKey}
+            onChangeText={updateMasterKey}
             secureTextEntry
             style={styles.input}
             placeholder="HUSHLY_MASTER_KEY"
             placeholderTextColor={C.textMuted}
           />
+          <View style={styles.actions}>
+            <Pressable style={styles.secondary} onPress={() => refreshAdmin()}>
+              <Text style={styles.secondaryText}>Refresh</Text>
+            </Pressable>
+            <Pressable style={styles.secondary} onPress={forgetMasterKey}>
+              <Text style={styles.secondaryText}>Forget</Text>
+            </Pressable>
+          </View>
           <Text style={styles.status}>{status || 'Enter the server master key.'}</Text>
         </TranscriptCard>
 
@@ -154,10 +212,10 @@ export default function Admin() {
         ) : null}
 
         <View style={styles.actions}>
-          <Pressable style={styles.secondary} onPress={listKeys}>
+          <Pressable style={styles.secondary} onPress={() => listKeys()}>
             <Text style={styles.secondaryText}>List keys</Text>
           </Pressable>
-          <Pressable style={styles.secondary} onPress={loadUsage}>
+          <Pressable style={styles.secondary} onPress={() => loadUsage()}>
             <Text style={styles.secondaryText}>Usage</Text>
           </Pressable>
         </View>
@@ -176,19 +234,31 @@ export default function Admin() {
               <Pressable style={styles.secondary} onPress={() => revokeKey(key.id)}>
                 <Text style={styles.secondaryText}>Revoke</Text>
               </Pressable>
+            ) : key.status === 'revoked' ? (
+              <Pressable style={styles.secondaryDanger} onPress={() => deleteKey(key.id)}>
+                <Text style={styles.secondaryDangerText}>Delete revoked key</Text>
+              </Pressable>
             ) : null}
           </TranscriptCard>
         ))}
 
-        {usage.map((row, index) => (
-          <TranscriptCard key={`${row.api_key_id ?? 'user'}-${index}`} style={styles.card}>
-            <Text style={styles.keyTitle}>{row.key?.label ?? row.api_key_id ?? 'Signed-in user'}</Text>
-            <Text style={styles.line}>
-              {row.requests} requests · {row.transcriptions} transcriptions · {row.cleanups} cleanups · {row.errors} errors
-            </Text>
-            <Text style={styles.line}>{byteString(row.audio_bytes)} audio uploaded</Text>
-          </TranscriptCard>
-        ))}
+        {usage.length ? (
+          usage.map((row, index) => (
+            <TranscriptCard key={`${row.api_key_id ?? row.key?.key_prefix ?? 'user'}-${index}`} style={styles.card}>
+              <Text style={styles.keyTitle}>{row.key?.label ?? row.api_key_id ?? 'Signed-in user'}</Text>
+              <Text style={styles.line}>
+                {row.key?.key_prefix ? `${row.key.key_prefix} · ` : ''}{row.key?.status ?? 'usage'}
+                {row.key?.tag ? ` · ${row.key.tag}` : ''}
+              </Text>
+              <Text style={styles.line}>
+                {row.requests} requests · {row.transcriptions} transcriptions · {row.cleanups} cleanups · {row.errors} errors
+              </Text>
+              <Text style={styles.line}>{byteString(row.audio_bytes)} audio uploaded</Text>
+            </TranscriptCard>
+          ))
+        ) : (
+          <Text style={styles.line}>No usage logged in the last 30 days.</Text>
+        )}
       </ScrollView>
     </View>
   );
@@ -250,6 +320,15 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   secondaryText: { color: C.textSecondary, fontFamily: 'Inter-Medium', fontSize: 13 },
+  secondaryDanger: {
+    alignItems: 'center',
+    borderColor: C.accent,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  secondaryDangerText: { color: C.accent, fontFamily: 'Inter-Medium', fontSize: 13 },
   keyText: { color: C.accent, fontFamily: 'JetBrainsMono-Regular', fontSize: 12, lineHeight: 18 },
   keyTitle: { color: C.textPrimary, fontFamily: 'Inter-Medium', fontSize: 16 },
   line: { color: C.textSecondary, fontFamily: 'Inter-Regular', fontSize: 13, lineHeight: 19 },

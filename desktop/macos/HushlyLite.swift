@@ -182,6 +182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     appMenuItem.submenu = appMenu
     mainMenu.addItem(appMenuItem)
 
+    let editMenuItem = NSMenuItem()
+    let editMenu = NSMenu(title: "Edit")
+    editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+    editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+    editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+    editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+    editMenuItem.submenu = editMenu
+    mainMenu.addItem(editMenuItem)
+
     let windowMenuItem = NSMenuItem()
     let windowMenu = NSMenu(title: "Window")
     windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
@@ -744,9 +753,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(apiKeyLabel)
 
     let keyField = NSSecureTextField(string: Preferences.shared.apiKey)
-    keyField.frame = NSRect(x: 168, y: 114, width: 396, height: 30)
+    keyField.frame = NSRect(x: 168, y: 114, width: 288, height: 30)
     content.addSubview(keyField)
     apiKeyField = keyField
+
+    let pasteKeyButton = NSButton(title: "Paste", target: self, action: #selector(pasteAPIKeyFromClipboard))
+    pasteKeyButton.frame = NSRect(x: 468, y: 112, width: 96, height: 32)
+    pasteKeyButton.bezelStyle = .rounded
+    content.addSubview(pasteKeyButton)
 
     let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
     accessStatus.frame = NSRect(x: 32, y: 78, width: 532, height: 18)
@@ -1161,8 +1175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func loadUsageSummary() async {
     do {
-      var request = URLRequest(url: apiURL(path: "/usage"))
+      var request = URLRequest(url: apiURL(path: "/usage-summary"), cachePolicy: .reloadIgnoringLocalCacheData)
       request.httpMethod = "GET"
+      request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+      request.setValue(localTodayStartISO(), forHTTPHeaderField: "X-Hushly-Today-Start")
       addAPIKeyHeader(to: &request)
       let (data, response) = try await URLSession.shared.data(for: request)
       let json = try decodeAPIResponse(data: data, response: response, label: "usage")
@@ -1185,10 +1201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let tag = identity["tag"] as? String
     let today = json["today"] as? [String: Any] ?? [:]
     let month = json["last30d"] as? [String: Any] ?? [:]
+    let updatedAt = json["updatedAt"] as? String
 
     var lines = ["Identity: \(label)"]
     if let tag, !tag.isEmpty {
       lines.append("Tag: \(tag)")
+    }
+    if let updatedAt {
+      lines.append("Updated: \(updatedAt)")
     }
     lines.append("")
     lines.append("Today")
@@ -1726,6 +1746,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     applyTabletAppearance()
     setStatus("Settings saved")
     refreshSettingsFields()
+  }
+
+  @objc private func pasteAPIKeyFromClipboard() {
+    let value = NSPasteboard.general.string(forType: .string)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !value.isEmpty else {
+      setStatus("Clipboard has no API key")
+      return
+    }
+    apiKeyField?.stringValue = value
+    Preferences.shared.apiKey = value
+    refreshSettingsFields()
+    setStatus("API key pasted and saved")
   }
 
   private func installHotKeyHandler() {
@@ -2716,6 +2749,11 @@ private func intValue(_ value: Any?) -> Int {
   if let double = value as? Double { return Int(double) }
   if let number = value as? NSNumber { return number.intValue }
   return 0
+}
+
+private func localTodayStartISO() -> String {
+  let start = Calendar.current.startOfDay(for: Date())
+  return ISO8601DateFormatter().string(from: start)
 }
 
 private func byteString(_ bytes: Int) -> String {

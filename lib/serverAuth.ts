@@ -11,6 +11,7 @@ export type RequestIdentity =
       apiKeyId: string;
       label: string;
       tag: string | null;
+      keyPrefix: string;
       userId: string | null;
     };
 
@@ -22,6 +23,7 @@ type APIKeyRow = {
   id: string;
   label: string;
   tag: string | null;
+  key_prefix: string;
   user_id: string | null;
   status: string;
 };
@@ -77,7 +79,7 @@ export async function authenticateRequest(
   const keyHash = await hashSecret(apiKey);
   const { data, error } = await admin
     .from('app_api_keys')
-    .select('id, label, tag, user_id, status')
+    .select('id, label, tag, key_prefix, user_id, status')
     .eq('key_hash', keyHash)
     .maybeSingle();
 
@@ -97,6 +99,7 @@ export async function authenticateRequest(
       apiKeyId: row.id,
       label: row.label,
       tag: row.tag,
+      keyPrefix: row.key_prefix,
       userId: row.user_id,
     },
   };
@@ -110,6 +113,9 @@ export async function recordUsage(
   try {
     await admin.from('api_usage_events').insert({
       api_key_id: identity?.kind === 'api_key' ? identity.apiKeyId : null,
+      api_key_label: identity?.kind === 'api_key' ? identity.label : null,
+      api_key_tag: identity?.kind === 'api_key' ? identity.tag : null,
+      api_key_prefix: identity?.kind === 'api_key' ? identity.keyPrefix : null,
       user_id: identity?.kind === 'user' ? identity.userId : identity?.userId ?? null,
       route: event.route,
       status: event.status,

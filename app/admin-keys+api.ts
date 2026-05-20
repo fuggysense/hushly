@@ -1,6 +1,6 @@
 import { createPlainAPIKey, getSupabaseAdmin, jsonError } from '@/lib/serverAuth';
 
-type AdminAction = 'list' | 'create' | 'revoke' | 'usage';
+type AdminAction = 'list' | 'create' | 'revoke' | 'delete' | 'usage';
 
 type AdminBody = {
   action?: AdminAction;
@@ -24,6 +24,9 @@ type KeyRow = {
 
 type UsageRow = {
   api_key_id: string | null;
+  api_key_label: string | null;
+  api_key_tag: string | null;
+  api_key_prefix: string | null;
   user_id: string | null;
   route: string;
   status: number;
@@ -34,6 +37,8 @@ type UsageRow = {
   error: string | null;
   created_at: string;
 };
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
 
 export async function POST(request: Request) {
   const master = process.env.HUSHLY_MASTER_KEY;
@@ -60,6 +65,8 @@ export async function POST(request: Request) {
       return createKey(admin, body);
     case 'revoke':
       return revokeKey(admin, body);
+    case 'delete':
+      return deleteKey(admin, body);
     case 'usage':
       return listUsage(admin, body);
     case 'list':
@@ -87,7 +94,7 @@ async function createKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>
     .single();
 
   if (error) return jsonError(500, error.message);
-  return Response.json({ key: key.secret, record: data as KeyRow });
+  return Response.json({ key: key.secret, record: data as KeyRow }, { headers: NO_STORE });
 }
 
 async function revokeKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
@@ -100,7 +107,22 @@ async function revokeKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>
     .single();
 
   if (error) return jsonError(500, error.message);
-  return Response.json({ record: data as KeyRow });
+  return Response.json({ record: data as KeyRow }, { headers: NO_STORE });
+}
+
+async function deleteKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
+  if (!body.id) return jsonError(400, 'id required');
+  const { data, error } = await admin
+    .from('app_api_keys')
+    .delete()
+    .eq('id', body.id)
+    .eq('status', 'revoked')
+    .select('id, label, tag, user_id, key_prefix, status, created_at, last_used_at')
+    .maybeSingle();
+
+  if (error) return jsonError(500, error.message);
+  if (!data) return jsonError(400, 'only revoked keys can be deleted');
+  return Response.json({ record: data as KeyRow }, { headers: NO_STORE });
 }
 
 async function listKeys(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>) {
@@ -111,7 +133,7 @@ async function listKeys(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>)
     .limit(500);
 
   if (error) return jsonError(500, error.message);
-  return Response.json({ keys: data ?? [] });
+  return Response.json({ keys: data ?? [] }, { headers: NO_STORE });
 }
 
 async function listUsage(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
@@ -119,7 +141,9 @@ async function listUsage(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   let query = admin
     .from('api_usage_events')
-    .select('api_key_id, user_id, route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at')
+    .select(
+      'api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at'
+    )
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(10000);
@@ -144,14 +168,34 @@ async function listUsage(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>
     }[]).map((key) => [key.id, key])
   );
 
-  return Response.json({
-    days,
-    summary: summarizeByIdentity(rows).map((entry) => ({
-      ...entry,
-      key: entry.api_key_id ? keysById.get(entry.api_key_id) ?? null : null,
-    })),
-    recent: rows.slice(0, 100),
-  });
+  return Response.json(
+    {
+      days,
+      updatedAt: new Date().toISOString(),
+      summary: summarizeByIdentity(rows).map((entry) => ({
+        ...entry,
+        key: entry.api_key_id
+          ? keysById.get(entry.api_key_id) ?? snapshotKey(entry)
+          : snapshotKey(entry),
+      })),
+      recent: rows.slice(0, 100),
+    },
+    { headers: NO_STORE }
+  );
+}
+
+function snapshotKey(entry: {
+  api_key_label: string | null;
+  api_key_tag: string | null;
+  api_key_prefix: string | null;
+}) {
+  if (!entry.api_key_label && !entry.api_key_prefix) return null;
+  return {
+    label: entry.api_key_label ?? 'Deleted API key',
+    tag: entry.api_key_tag,
+    key_prefix: entry.api_key_prefix ?? 'deleted',
+    status: 'deleted',
+  };
 }
 
 function summarizeByIdentity(rows: UsageRow[]) {
@@ -159,6 +203,9 @@ function summarizeByIdentity(rows: UsageRow[]) {
     string,
     {
       api_key_id: string | null;
+      api_key_label: string | null;
+      api_key_tag: string | null;
+      api_key_prefix: string | null;
       user_id: string | null;
       requests: number;
       transcriptions: number;
@@ -171,11 +218,14 @@ function summarizeByIdentity(rows: UsageRow[]) {
   >();
 
   for (const row of rows) {
-    const key = row.api_key_id ?? `user:${row.user_id ?? 'unknown'}`;
+    const key = row.api_key_id ?? row.api_key_prefix ?? `user:${row.user_id ?? 'unknown'}`;
     const existing =
       summary.get(key) ??
       {
         api_key_id: row.api_key_id,
+        api_key_label: row.api_key_label,
+        api_key_tag: row.api_key_tag,
+        api_key_prefix: row.api_key_prefix,
         user_id: row.user_id,
         requests: 0,
         transcriptions: 0,

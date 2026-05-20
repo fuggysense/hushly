@@ -92,10 +92,21 @@ export async function getUsageSummary(): Promise<{
   if (!authHeader.Authorization) return null;
   const res = await fetchApi('/usage-summary', {
     method: 'GET',
-    headers: authHeader,
+    cache: 'no-store',
+    headers: {
+      ...authHeader,
+      'Cache-Control': 'no-cache',
+      'X-Hushly-Today-Start': localTodayStart(),
+    },
   });
   if (!res.ok) return null;
   return res.json();
+}
+
+function localTodayStart() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
 }
 
 export async function persistTranscript(payload: {
