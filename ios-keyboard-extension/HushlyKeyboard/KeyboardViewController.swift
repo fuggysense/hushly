@@ -11,13 +11,13 @@ import AVFoundation
 //   • Info.plist: NSExtensionAttributes.RequestsOpenAccess = YES
 //   • User flips Settings → General → Keyboards → hushly → Allow Full Access
 //   • App Group entitlement matches the main app (so we can read the
-//     Supabase JWT written by the main app at sign-in time).
+//     Hushly session token written by the main app at sign-in time).
 
 final class KeyboardViewController: UIInputViewController {
 
   // MARK: - Config
 
-  private let apiBase = "https://hushly-six.vercel.app"
+  private let apiBase = "https://hushly.genflos.com"
   private let appGroup = "group.app.hushly"  // must match main app's entitlement
 
   // MARK: - UI

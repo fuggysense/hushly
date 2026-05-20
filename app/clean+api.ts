@@ -7,7 +7,7 @@
 //   vocabulary:  array of names/jargon to preserve verbatim
 //   context:     freeform context the user maintains (e.g. project names)
 
-import { authenticateRequest, getSupabaseAdmin, jsonError, recordUsage } from '@/lib/serverAuth';
+import { authenticateRequest, jsonError, recordUsage } from '@/lib/serverAuth';
 import {
   cleanupErrorMessage,
   cleanupErrorStatus,
@@ -17,8 +17,7 @@ import {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const admin = getSupabaseAdmin();
-  const auth = await authenticateRequest(request, admin);
+  const auth = await authenticateRequest(request);
   if (auth instanceof Response) return auth;
 
   let body: {
@@ -48,7 +47,7 @@ export async function POST(request: Request) {
       context: body.context,
     });
 
-    await recordUsage(auth.admin, auth.identity, {
+    await recordUsage(auth.db, auth.identity, {
       route: '/clean',
       status: 200,
       durationMs: Date.now() - startedAt,
@@ -70,7 +69,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = cleanupErrorMessage(error);
     const status = cleanupErrorStatus(error);
-    await recordUsage(auth.admin, auth.identity, {
+    await recordUsage(auth.db, auth.identity, {
       route: '/clean',
       status,
       durationMs: Date.now() - startedAt,

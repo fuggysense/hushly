@@ -1,0 +1,16 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$HUSHLY_HOSTNAME} {
+	encode zstd gzip
+
+	handle_path /updates/* {
+		root * /srv/updates
+		file_server
+	}
+
+	handle {
+		reverse_proxy app:3000
+	}
+}

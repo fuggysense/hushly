@@ -1,23 +1,10 @@
-// Persists a transcript row + optional audio metadata.
-// Audio bytes are uploaded directly by the client to Supabase Storage
-// (with their JWT) so the file doesn't traverse our serverless function.
-// This route only writes the row referencing the storage path.
-
-import { createClient } from '@supabase/supabase-js';
+import { authenticateRequest, jsonError } from '@/lib/serverAuth';
+import { getDb } from '@/lib/serverDb';
 
 export async function POST(request: Request) {
-  const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return jsonError(500, 'supabase env not set');
-
-  const auth = request.headers.get('authorization') ?? '';
-  const accessToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (!accessToken) return jsonError(401, 'missing access token');
-
-  const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
-
-  const { data: userData, error: userErr } = await admin.auth.getUser(accessToken);
-  if (userErr || !userData.user) return jsonError(401, 'invalid token');
+  const auth = await authenticateRequest(request);
+  if (auth instanceof Response) return auth;
+  if (!auth.identity.userId) return jsonError(403, 'transcript persistence requires a user');
 
   let body: {
     raw?: string;
@@ -34,26 +21,24 @@ export async function POST(request: Request) {
 
   if (!body.raw && !body.cleaned) return jsonError(400, 'raw or cleaned required');
 
-  const { data, error } = await admin
-    .from('transcripts')
-    .insert({
-      user_id: userData.user.id,
-      raw_text: body.raw ?? '',
-      cleaned_text: body.cleaned ?? '',
-      duration_ms: body.duration_ms ?? null,
-      audio_path: body.audio_path ?? null,
-      audio_mime: body.audio_mime ?? null,
-    })
-    .select('id, created_at, audio_path')
-    .single();
+  const { rows } = await getDb().query<{
+    id: string;
+    created_at: string;
+    audio_path: string | null;
+  }>(
+    `insert into transcripts
+     (user_id, raw_text, cleaned_text, duration_ms, audio_path, audio_mime)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, created_at, audio_path`,
+    [
+      auth.identity.userId,
+      body.raw ?? '',
+      body.cleaned ?? '',
+      body.duration_ms ?? null,
+      body.audio_path ?? null,
+      body.audio_mime ?? null,
+    ]
+  );
 
-  if (error) return jsonError(500, error.message);
-  return Response.json({ id: data.id, created_at: data.created_at, audio_path: data.audio_path });
-}
-
-function jsonError(status: number, error: string) {
-  return new Response(JSON.stringify({ error }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return Response.json(rows[0]);
 }

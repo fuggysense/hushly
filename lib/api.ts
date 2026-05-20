@@ -1,21 +1,6 @@
-// Client-side helpers for talking to the API routes.
-// Knows how to find the API base on both web and native.
-
-import { Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { supabase } from './supabase';
-
-export function getApiBase(): string {
-  // Web always prefers same-origin so local dev hits local API routes and
-  // production hits Vercel-served routes. Native (no window) uses the
-  // explicit env var (set to the Vercel URL for both Expo Go dev + prod).
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-  const explicit = process.env.EXPO_PUBLIC_API_BASE;
-  if (explicit) return explicit.replace(/\/$/, '');
-  return '';
-}
+import { getApiBase } from './apiBase';
+import { getStoredSession } from './clientAuth';
 
 async function fetchApi(path: string, init: RequestInit): Promise<Response> {
   const url = `${getApiBase()}${path}`;
@@ -28,9 +13,7 @@ async function fetchApi(path: string, init: RequestInit): Promise<Response> {
 }
 
 async function sessionAuthHeader(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getStoredSession();
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
@@ -116,15 +99,13 @@ export async function persistTranscript(payload: {
   audio_path?: string;
   audio_mime?: string;
 }): Promise<{ id: string; created_at: string; audio_path: string | null } | null> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return null;
   const res = await fetchApi('/persist', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${session.access_token}`,
+      ...authHeader,
     },
     body: JSON.stringify(payload),
   });
@@ -132,32 +113,21 @@ export async function persistTranscript(payload: {
   return res.json();
 }
 
-// Uploads audio bytes directly to Supabase Storage from the client (using
-// the user's JWT — RLS gates the upload to their own folder).
-// Returns the storage path so the persist call can reference it.
 export async function uploadAudio(
   audioBytes: ArrayBuffer | Blob,
   mimeType: string
 ): Promise<{ path: string } | null> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
-  const ext = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'm4a' : 'audio';
-  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const path = `${session.user.id}/${fileName}`;
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return null;
   const body =
     audioBytes instanceof Blob ? audioBytes : new Blob([audioBytes], { type: mimeType });
-  const { error } = await supabase.storage.from('transcript-audio').upload(path, body, {
-    contentType: mimeType,
-    upsert: false,
+  const res = await fetchApi('/audio', {
+    method: 'POST',
+    headers: { 'Content-Type': mimeType, ...authHeader },
+    body,
   });
-  if (error) {
-    // eslint-disable-next-line no-console
-    console.warn('audio upload failed:', error.message);
-    return null;
-  }
-  return { path };
+  if (!res.ok) return null;
+  return res.json();
 }
 
 export async function listTranscripts(): Promise<
@@ -170,35 +140,46 @@ export async function listTranscripts(): Promise<
     audio_path: string | null;
   }>
 > {
-  const { data, error } = await supabase
-    .from('transcripts')
-    .select('id, cleaned_text, raw_text, created_at, duration_ms, audio_path')
-    .order('created_at', { ascending: false })
-    .limit(100);
-  if (error) return [];
-  return data ?? [];
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return [];
+  const res = await fetchApi('/transcripts', {
+    method: 'GET',
+    headers: { ...authHeader, 'Cache-Control': 'no-cache' },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json()) as {
+    rows?: Array<{
+      id: string;
+      cleaned_text: string;
+      raw_text: string;
+      created_at: string;
+      duration_ms: number | null;
+      audio_path: string | null;
+    }>;
+  };
+  return body.rows ?? [];
 }
 
-export async function deleteTranscript(id: string, audioPath?: string | null): Promise<boolean> {
-  if (audioPath) {
-    await supabase.storage.from('transcript-audio').remove([audioPath]).catch(() => {});
-  }
-  const { error } = await supabase.from('transcripts').delete().eq('id', id);
-  return !error;
+export async function deleteTranscript(id: string): Promise<boolean> {
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return false;
+  const res = await fetchApi(`/transcripts?id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeader,
+  });
+  return res.ok;
 }
 
 export async function retryTranscript(
   id: string
 ): Promise<{ raw: string; cleaned: string } | null> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) return null;
+  const authHeader = await sessionAuthHeader();
+  if (!authHeader.Authorization) return null;
   const res = await fetchApi('/retry', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${session.access_token}`,
+      ...authHeader,
     },
     body: JSON.stringify({ id }),
   });

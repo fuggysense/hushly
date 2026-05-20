@@ -17,7 +17,7 @@
   <key>CFBundleVersion</key>
   <string>2</string>
   <key>SUFeedURL</key>
-  <string>https://hushly-six.vercel.app/updates/appcast.xml</string>
+  <string>https://hushly.genflos.com/updates/appcast.xml</string>
   <key>SUPublicEDKey</key>
   <string>XWqlU8Da6xfqaWixD8axrfCLU7NQllWugB+a3D/aYBk=</string>
   <key>SUEnableAutomaticChecks</key>

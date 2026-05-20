@@ -5,7 +5,7 @@ import AudioToolbox
 import Carbon.HIToolbox
 import Sparkle
 
-private let defaultAPIBase = "https://hushly-six.vercel.app"
+private let defaultAPIBase = "https://hushly.genflos.com"
 
 @main
 struct HushlyLiteApp {
@@ -1241,7 +1241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func historyStorageText() -> String {
-    "Storage: local on this Mac. Supabase sync: not connected in the desktop app."
+    "Storage: local on this Mac. VPS sync: not connected in the desktop app."
   }
 
   private func dictionaryStatusText() -> String {

@@ -16,32 +16,32 @@ The iOS keyboard extension is the **second consumer** of the same backend the Re
 │  │  Mail, anything) │         │                                    │   │
 │  └──────────────────┘         │  • UIInputViewController subclass  │   │
 │           ▲                   │  • AVAudioRecorder → m4a chunks    │   │
-│           │ UITextDocument-   │  • URLSession → Vercel API         │   │
-│           │ Proxy.insertText  │  • Reads JWT from App Group        │   │
+│           │ UITextDocument-   │  • URLSession → Hushly API         │   │
+│           │ Proxy.insertText  │  • Reads session token from group  │   │
 │           │                   └────────────────┬───────────────────┘   │
 │                                                │                       │
 │  ┌────────────────────────────────────────┐   │   ┌──────────────┐    │
 │  │  Main hushly app (Expo / React Native) │◄──┴──►│ App Group    │    │
-│  │  • Signs user in (Supabase auth)       │       │ UserDefaults │    │
-│  │  • Writes JWT to App Group on sign-in  │  jwt  │ group.app.   │    │
+│  │  • Signs user in (Hushly auth)         │       │ UserDefaults │    │
+│  │  • Writes token to App Group on sign-in│ token │ group.app.   │    │
 │  └────────────────────────────────────────┘       │ hushly       │    │
 │                  │                                 └──────────────┘    │
 └──────────────────┼─────────────────────────────────────────────────────┘
                    │ HTTPS
                    ▼
         ┌──────────────────────────────────────────┐
-        │ Vercel (https://hushly-six.vercel.app)   │
+        │ VPS (https://hushly.genflos.com)         │
         │   /transcribe → Deepgram Nova-3          │
-        │   /clean      → Anthropic Haiku 4.5      │
-        │   /persist    → Supabase (JWT-gated)     │
-        │   /retry      → Supabase + DG + Haiku    │
+        │   /clean      → OpenAI cleanup           │
+        │   /persist    → Postgres                 │
+        │   /retry      → Postgres + DG + cleanup  │
         └──────────────────────────────────────────┘
 ```
 
 **Three independent processes** ever touch the keyboard's world:
 1. The **host app** (the thing being typed into) — pure data sink, doesn't know hushly exists. Only contract: `UITextDocumentProxy.insertText(string)`.
-2. The **main hushly app** — owns sign-in. Hands the keyboard a JWT via App Group shared storage.
-3. The **Vercel backend** — same APIs as the main app; the keyboard is just another client.
+2. The **main hushly app** — owns sign-in. Hands the keyboard a session token via App Group shared storage.
+3. The **Hushly VPS backend** — same APIs as the main app; the keyboard is just another client.
 
 Everything else lives **inside the extension's own sandbox**: audio capture, network stack, UI.
 
@@ -73,7 +73,7 @@ What happens when a user taps the record button in any text field anywhere on iO
     │   ├─ audioRecorder.stop()   ← seals current chunk
     │   ├─ beginSegment()         ← starts next chunk immediately
     │   └─ Task { transcribeChunk(url) }
-    │       ├─ POST <m4a bytes> to https://hushly-six.vercel.app/transcribe
+    │       ├─ POST <m4a bytes> to https://hushly.genflos.com/transcribe
     │       ├─ ← { transcript: "..." }
     │       └─ partials.append(transcript)
     │
@@ -141,7 +141,7 @@ Error states the user can hit:
 | Tap-to-record → AVAudioRecorder writes m4a | ✅ working |
 | 2.5s chunked rotation + parallel transcribe | ✅ working |
 | POST to `/transcribe` (Deepgram proxy) | ✅ working |
-| POST to `/clean` (Anthropic Haiku proxy) | ✅ working |
+| POST to `/clean` (OpenAI cleanup proxy) | ✅ working |
 | `UITextDocumentProxy.insertText` into host app | ✅ working |
 | Globe-key keyboard switcher (`handleInputModeList`) | ✅ working |
 | Info.plist: `NSExtensionPointIdentifier=com.apple.keyboard-service` | ✅ |
@@ -178,7 +178,7 @@ For a one-person ship-it-fast path, **Option 2** is acceptable. For a project th
 
 The keyboard makes anonymous calls today. Calls to `/transcribe` and `/clean` are anonymous-friendly (no auth required), so this works. But:
 
-- `/persist` requires a Bearer JWT — keyboard transcripts therefore **never get saved to history**. They insert into the host app and vanish.
+- `/persist` requires a Bearer session token — keyboard transcripts therefore **never get saved to history**. They insert into the host app and vanish.
 - Usage events can't be attributed to a user → no rate-limiting, no per-plan quota enforcement.
 
 To fix this:
@@ -186,12 +186,12 @@ To fix this:
 ```
 [Main app, after sign-in]                    [Keyboard, on every request]
 
-let g = UserDefaults(suiteName:               let jwt = UserDefaults(
+let g = UserDefaults(suiteName:               let token = UserDefaults(
   "group.app.hushly")                           suiteName: "group.app.hushly"
-g?.set(session.accessToken,                   )?.string(forKey: "supabase_jwt")
-       forKey: "supabase_jwt")
+g?.set(session.accessToken,                   )?.string(forKey: "hushly_access_token")
+       forKey: "hushly_access_token")
                                               req.setValue(
-                                                "Bearer \(jwt ?? "")",
+                                                "Bearer \(token ?? "")",
                                                 forHTTPHeaderField:
                                                 "Authorization")
 ```
@@ -199,8 +199,8 @@ g?.set(session.accessToken,                   )?.string(forKey: "supabase_jwt")
 Required setup:
 1. Enable `App Groups` capability in **both** targets (main app + keyboard extension) in Xcode → Signing & Capabilities.
 2. Add the same group ID to both: `group.app.hushly`.
-3. From RN side, write the JWT via a tiny native module or use `expo-secure-store` with shared keychain access group (cleaner than UserDefaults; survives iOS auth refreshes better).
-4. From Swift side, read on every request. Refresh logic: if `/persist` returns 401, the JWT expired — keyboard can't refresh it itself (no Supabase SDK), so it should silently drop persistence and rely on the main app being opened to refresh.
+3. From RN side, write the Hushly session token via a tiny native module or use `expo-secure-store` with shared keychain access group (cleaner than UserDefaults; survives app restarts better).
+4. From Swift side, read on every request. Refresh logic: if `/persist` returns 401, the session expired — keyboard can't refresh it itself, so it should silently drop persistence and rely on the main app being opened to refresh.
 
 ### Gap C — Visual design parity
 

@@ -1,31 +1,32 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import type { Session } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import {
+  getStoredSession,
+  onSessionChange,
+  type HushlySession,
+} from './clientAuth';
 
 type AuthState = {
-  session: Session | null;
+  session: HushlySession | null;
   loading: boolean;
 };
 
 const AuthContext = createContext<AuthState>({ session: null, loading: true });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<HushlySession | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
+    getStoredSession().then((stored) => {
       if (!mounted) return;
-      setSession(data.session);
+      setSession(stored);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-    });
+    const unsubscribe = onSessionChange((next) => setSession(next));
     return () => {
       mounted = false;
-      sub.subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
 

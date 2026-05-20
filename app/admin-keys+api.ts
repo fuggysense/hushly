@@ -1,4 +1,5 @@
-import { createPlainAPIKey, getSupabaseAdmin, jsonError } from '@/lib/serverAuth';
+import { createPlainAPIKey, jsonError } from '@/lib/serverAuth';
+import { getDb } from '@/lib/serverDb';
 
 type AdminAction = 'list' | 'create' | 'revoke' | 'delete' | 'usage';
 
@@ -50,9 +51,6 @@ export async function POST(request: Request) {
     '';
   if (provided !== master) return jsonError(401, 'invalid master key');
 
-  const admin = getSupabaseAdmin();
-  if (!admin) return jsonError(500, 'supabase env not set');
-
   let body: AdminBody = {};
   try {
     body = (await request.json()) as AdminBody;
@@ -60,113 +58,99 @@ export async function POST(request: Request) {
     return jsonError(400, 'invalid JSON');
   }
 
+  const db = getDb();
+
   switch (body.action ?? 'list') {
     case 'create':
-      return createKey(admin, body);
+      return createKey(body);
     case 'revoke':
-      return revokeKey(admin, body);
+      return updateKeyStatus(body, 'revoked');
     case 'delete':
-      return deleteKey(admin, body);
+      return deleteKey(body);
     case 'usage':
-      return listUsage(admin, body);
-    case 'list':
-      return listKeys(admin);
+      return listUsage(body);
+    case 'list': {
+      const { rows } = await db.query<KeyRow>(
+        `select id, label, tag, user_id, key_prefix, status, created_at, last_used_at
+         from app_api_keys
+         order by created_at desc
+         limit 500`
+      );
+      return Response.json({ keys: rows }, { headers: NO_STORE });
+    }
     default:
       return jsonError(400, 'unknown action');
   }
 }
 
-async function createKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
+async function createKey(body: AdminBody) {
   const label = body.label?.trim();
   if (!label) return jsonError(400, 'label required');
 
   const key = await createPlainAPIKey();
-  const { data, error } = await admin
-    .from('app_api_keys')
-    .insert({
-      label,
-      tag: cleanOptional(body.tag),
-      user_id: cleanOptional(body.user_id),
-      key_hash: key.hash,
-      key_prefix: key.prefix,
-    })
-    .select('id, label, tag, user_id, key_prefix, status, created_at, last_used_at')
-    .single();
+  const { rows } = await getDb().query<KeyRow>(
+    `insert into app_api_keys (label, tag, user_id, key_hash, key_prefix)
+     values ($1, $2, $3, $4, $5)
+     returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
+    [label, cleanOptional(body.tag), cleanOptional(body.user_id), key.hash, key.prefix]
+  );
 
-  if (error) return jsonError(500, error.message);
-  return Response.json({ key: key.secret, record: data as KeyRow }, { headers: NO_STORE });
+  return Response.json({ key: key.secret, record: rows[0] }, { headers: NO_STORE });
 }
 
-async function revokeKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
+async function updateKeyStatus(body: AdminBody, status: string) {
   if (!body.id) return jsonError(400, 'id required');
-  const { data, error } = await admin
-    .from('app_api_keys')
-    .update({ status: 'revoked' })
-    .eq('id', body.id)
-    .select('id, label, tag, user_id, key_prefix, status, created_at, last_used_at')
-    .single();
-
-  if (error) return jsonError(500, error.message);
-  return Response.json({ record: data as KeyRow }, { headers: NO_STORE });
+  const { rows } = await getDb().query<KeyRow>(
+    `update app_api_keys
+     set status = $2
+     where id = $1
+     returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
+    [body.id, status]
+  );
+  if (!rows[0]) return jsonError(404, 'key not found');
+  return Response.json({ record: rows[0] }, { headers: NO_STORE });
 }
 
-async function deleteKey(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
+async function deleteKey(body: AdminBody) {
   if (!body.id) return jsonError(400, 'id required');
-  const { data, error } = await admin
-    .from('app_api_keys')
-    .delete()
-    .eq('id', body.id)
-    .eq('status', 'revoked')
-    .select('id, label, tag, user_id, key_prefix, status, created_at, last_used_at')
-    .maybeSingle();
-
-  if (error) return jsonError(500, error.message);
-  if (!data) return jsonError(400, 'only revoked keys can be deleted');
-  return Response.json({ record: data as KeyRow }, { headers: NO_STORE });
+  const { rows } = await getDb().query<KeyRow>(
+    `delete from app_api_keys
+     where id = $1 and status = 'revoked'
+     returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
+    [body.id]
+  );
+  if (!rows[0]) return jsonError(400, 'only revoked keys can be deleted');
+  return Response.json({ record: rows[0] }, { headers: NO_STORE });
 }
 
-async function listKeys(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>) {
-  const { data, error } = await admin
-    .from('app_api_keys')
-    .select('id, label, tag, user_id, key_prefix, status, created_at, last_used_at')
-    .order('created_at', { ascending: false })
-    .limit(500);
-
-  if (error) return jsonError(500, error.message);
-  return Response.json({ keys: data ?? [] }, { headers: NO_STORE });
-}
-
-async function listUsage(admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>, body: AdminBody) {
+async function listUsage(body: AdminBody) {
   const days = Math.max(1, Math.min(365, body.days ?? 30));
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  let query = admin
-    .from('api_usage_events')
-    .select(
-      'api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at'
-    )
-    .gte('created_at', since)
-    .order('created_at', { ascending: false })
-    .limit(10000);
+  const params: unknown[] = [since];
+  let keyFilter = '';
+  if (body.id) {
+    params.push(body.id);
+    keyFilter = 'and api_key_id = $2';
+  }
 
-  if (body.id) query = query.eq('api_key_id', body.id);
-
-  const { data, error } = await query;
-  if (error) return jsonError(500, error.message);
-
-  const rows = (data ?? []) as UsageRow[];
-  const { data: keyRows } = await admin
-    .from('app_api_keys')
-    .select('id, label, tag, key_prefix, status')
-    .limit(1000);
-  const keysById = new Map(
-    ((keyRows ?? []) as {
-      id: string;
-      label: string;
-      tag: string | null;
-      key_prefix: string;
-      status: string;
-    }[]).map((key) => [key.id, key])
+  const { rows } = await getDb().query<UsageRow>(
+    `select api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status,
+            duration_ms, audio_bytes, input_chars, output_chars, error, created_at
+     from api_usage_events
+     where created_at >= $1 ${keyFilter}
+     order by created_at desc
+     limit 10000`,
+    params
   );
+
+  const { rows: keyRows } = await getDb().query<{
+    id: string;
+    label: string;
+    tag: string | null;
+    key_prefix: string;
+    status: string;
+  }>('select id, label, tag, key_prefix, status from app_api_keys limit 1000');
+  const keysById = new Map(keyRows.map((key) => [key.id, key]));
 
   return Response.json(
     {

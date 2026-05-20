@@ -1,0 +1,87 @@
+name: hushly
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hushly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hushly}
+      POSTGRES_USER: ${POSTGRES_USER:-hushly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - hushly-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hushly} -d ${POSTGRES_DB:-hushly}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hushly-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.vps
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hushly}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hushly}
+      HUSHLY_AUDIO_DIR: /data/audio
+      PORT: 3000
+    volumes:
+      - hushly-audio:/data/audio
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: hushly-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - .env.vps
+    environment:
+      HUSHLY_HOSTNAME: ${HUSHLY_HOSTNAME:-hushly.genflos.com}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./public/updates:/srv/updates:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  backup:
+    image: postgres:16-alpine
+    container_name: hushly-backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.vps
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-hushly}
+      POSTGRES_USER: ${POSTGRES_USER:-hushly}
+    volumes:
+      - ./backups:/backups
+      - ./public/updates:/updates:ro
+    command: >
+      sh -c 'while true; do
+        stamp=$$(date -u +%Y%m%dT%H%M%SZ);
+        pg_dump -h postgres -U "$$POSTGRES_USER" "$$POSTGRES_DB" | gzip > "/backups/hushly-$$stamp.sql.gz";
+        tar -czf "/backups/hushly-updates-$$stamp.tgz" -C /updates .;
+        find /backups -type f -mtime +14 -delete;
+        sleep 86400;
+      done'
+
+volumes:
+  hushly-postgres:
+  hushly-audio:
+  caddy-data:
+  caddy-config:

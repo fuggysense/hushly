@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+import { getDb, type Db } from '@/lib/serverDb';
+import { validateSessionToken } from '@/lib/serverUserAuth';
 
 export type RequestIdentity =
   | {
@@ -14,10 +15,6 @@ export type RequestIdentity =
       keyPrefix: string;
       userId: string | null;
     };
-
-type SupabaseAdmin = Omit<ReturnType<typeof createClient>, 'from'> & {
-  from: (relation: string) => any;
-};
 
 type APIKeyRow = {
   id: string;
@@ -45,30 +42,21 @@ export function jsonError(status: number, error: string) {
   });
 }
 
-export function getSupabaseAdmin(): SupabaseAdmin | null {
-  const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return null;
-  return createClient(url, serviceKey, { auth: { persistSession: false } }) as unknown as SupabaseAdmin;
-}
-
 export async function authenticateRequest(
   request: Request,
-  admin = getSupabaseAdmin()
-): Promise<{ identity: RequestIdentity; admin: SupabaseAdmin } | Response> {
-  if (!admin) return jsonError(500, 'supabase env not set');
-
+  db = getDb()
+): Promise<{ identity: RequestIdentity; db: Db } | Response> {
   const authorization = request.headers.get('authorization') ?? '';
   const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
   if (bearer) {
-    const { data, error } = await admin.auth.getUser(bearer);
-    if (error || !data.user) return jsonError(401, 'invalid access token');
+    const user = await validateSessionToken(bearer);
+    if (!user) return jsonError(401, 'invalid access token');
     return {
-      admin,
+      db,
       identity: {
         kind: 'user',
-        userId: data.user.id,
-        email: data.user.email ?? null,
+        userId: user.id,
+        email: user.email,
       },
     };
   }
@@ -77,23 +65,18 @@ export async function authenticateRequest(
   if (!apiKey) return jsonError(401, 'missing API key');
 
   const keyHash = await hashSecret(apiKey);
-  const { data, error } = await admin
-    .from('app_api_keys')
-    .select('id, label, tag, key_prefix, user_id, status')
-    .eq('key_hash', keyHash)
-    .maybeSingle();
+  const { rows } = await db.query<APIKeyRow>(
+    'select id, label, tag, key_prefix, user_id, status from app_api_keys where key_hash = $1 limit 1',
+    [keyHash]
+  );
 
-  if (error) return jsonError(500, error.message);
-  const row = data as APIKeyRow | null;
+  const row = rows[0];
   if (!row || row.status !== 'active') return jsonError(401, 'invalid API key');
 
-  await admin
-    .from('app_api_keys')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('id', row.id);
+  await db.query('update app_api_keys set last_used_at = now() where id = $1', [row.id]);
 
   return {
-    admin,
+    db,
     identity: {
       kind: 'api_key',
       apiKeyId: row.id,
@@ -105,26 +88,28 @@ export async function authenticateRequest(
   };
 }
 
-export async function recordUsage(
-  admin: SupabaseAdmin,
-  identity: RequestIdentity | null,
-  event: UsageEvent
-) {
+export async function recordUsage(db: Db, identity: RequestIdentity | null, event: UsageEvent) {
   try {
-    await admin.from('api_usage_events').insert({
-      api_key_id: identity?.kind === 'api_key' ? identity.apiKeyId : null,
-      api_key_label: identity?.kind === 'api_key' ? identity.label : null,
-      api_key_tag: identity?.kind === 'api_key' ? identity.tag : null,
-      api_key_prefix: identity?.kind === 'api_key' ? identity.keyPrefix : null,
-      user_id: identity?.kind === 'user' ? identity.userId : identity?.userId ?? null,
-      route: event.route,
-      status: event.status,
-      duration_ms: event.durationMs ?? null,
-      audio_bytes: event.audioBytes ?? null,
-      input_chars: event.inputChars ?? null,
-      output_chars: event.outputChars ?? null,
-      error: event.error ? event.error.slice(0, 500) : null,
-    });
+    await db.query(
+      `insert into api_usage_events
+       (api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status,
+        duration_ms, audio_bytes, input_chars, output_chars, error)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        identity?.kind === 'api_key' ? identity.apiKeyId : null,
+        identity?.kind === 'api_key' ? identity.label : null,
+        identity?.kind === 'api_key' ? identity.tag : null,
+        identity?.kind === 'api_key' ? identity.keyPrefix : null,
+        identity?.kind === 'user' ? identity.userId : identity?.userId ?? null,
+        event.route,
+        event.status,
+        event.durationMs ?? null,
+        event.audioBytes ?? null,
+        event.inputChars ?? null,
+        event.outputChars ?? null,
+        event.error ? event.error.slice(0, 500) : null,
+      ]
+    );
   } catch {
     // Usage logging must never break transcription.
   }

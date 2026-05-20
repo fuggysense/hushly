@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
-import { supabase } from '@/lib/supabase';
+import { signInWithPassword } from '@/lib/clientAuth';
 import { C } from '@/lib/tokens';
 
 export default function SignIn() {
@@ -15,7 +15,7 @@ export default function SignIn() {
       return;
     }
     setBusy(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await signInWithPassword(email, password);
     setBusy(false);
     if (error) Alert.alert('Sign-in failed', error.message);
   }

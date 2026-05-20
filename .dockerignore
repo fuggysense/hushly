@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.vps.example
+node_modules
+dist
+.expo
+.vercel
+.cache
+.data
+backups
+*.log
+*.zip

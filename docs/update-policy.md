@@ -34,4 +34,4 @@ Every change must be traceable to a git commit and a pending-change log entry. I
 - Run `npm run lint`.
 - Run `scripts/build-macos-app.sh`.
 - Verify `codesign --verify --deep --strict`.
-- Deploy Vercel only after approval.
+- Deploy the Contabo VPS only after approval when the change publishes a Sparkle update.

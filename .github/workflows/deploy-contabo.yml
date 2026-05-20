@@ -1,0 +1,63 @@
+name: Deploy Contabo
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-contabo
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npx expo export -p web
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.CONTABO_SSH_KEY }}" > ~/.ssh/contabo
+          chmod 600 ~/.ssh/contabo
+          ssh-keyscan -H "${{ secrets.CONTABO_HOST }}" >> ~/.ssh/known_hosts
+      - name: Sync source
+        run: |
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'dist' \
+            --exclude '.env.local' \
+            --exclude '.env.vps' \
+            -e "ssh -i ~/.ssh/contabo" \
+            ./ "${{ secrets.CONTABO_USER }}@${{ secrets.CONTABO_HOST }}:/opt/hushly/app/"
+      - name: Write VPS env and restart Hushly only
+        run: |
+          ssh -i ~/.ssh/contabo "${{ secrets.CONTABO_USER }}@${{ secrets.CONTABO_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd /opt/hushly/app
+          umask 077
+          cat > .env.vps <<'ENV'
+          ${{ secrets.HUSHLY_VPS_ENV }}
+          ENV
+          docker compose -f docker-compose.vps.yml --env-file .env.vps build app
+          docker compose -f docker-compose.vps.yml --env-file .env.vps up -d postgres
+          docker compose -f docker-compose.vps.yml --env-file .env.vps run --rm app npm run db:migrate
+          docker compose -f docker-compose.vps.yml --env-file .env.vps up -d app caddy backup
+          docker compose -f docker-compose.vps.yml --env-file .env.vps ps
+          EOF

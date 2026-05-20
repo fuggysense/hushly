@@ -62,24 +62,24 @@ eas build --profile development --platform ios
 1. User holds a text field in any app.
 2. Switches to hushly keyboard via the globe key.
 3. Taps "Tap to record" → mic captures audio in 2.5s chunks.
-4. Each chunk POSTs to `https://hushly-six.vercel.app/transcribe` → partial transcript appended.
-5. Tap "Tap to stop" → drops un-rotated final segment, calls `/clean` for Haiku cleanup.
+4. Each chunk POSTs to `https://hushly.genflos.com/transcribe` → partial transcript appended.
+5. Tap "Tap to stop" → drops un-rotated final segment, calls `/clean` for OpenAI cleanup.
 6. `UITextDocumentProxy.insertText(cleaned)` writes directly into the host app's text field.
 
 No clipboard hop. No app-switch. No copy/paste step.
 
 ## Auth (not yet wired)
 
-The current scaffold makes anonymous calls to the API. To attribute transcripts to a logged-in user from the keyboard, you need to share the Supabase JWT between the main app and the extension via the App Group:
+The current scaffold makes anonymous calls to the API. To attribute transcripts to a logged-in user from the keyboard, share the Hushly session token between the main app and the extension via the App Group:
 
 ```swift
 // In the main app, after sign-in:
 let groupDefaults = UserDefaults(suiteName: "group.app.hushly")
-groupDefaults?.set(session.accessToken, forKey: "supabase_jwt")
+groupDefaults?.set(session.accessToken, forKey: "hushly_access_token")
 
 // In KeyboardViewController, when calling /persist:
-let jwt = UserDefaults(suiteName: "group.app.hushly")?.string(forKey: "supabase_jwt")
-req.setValue("Bearer \(jwt ?? "")", forHTTPHeaderField: "Authorization")
+let token = UserDefaults(suiteName: "group.app.hushly")?.string(forKey: "hushly_access_token")
+req.setValue("Bearer \(token ?? "")", forHTTPHeaderField: "Authorization")
 ```
 
 Add this as a Phase 2 task after the basic keyboard works.

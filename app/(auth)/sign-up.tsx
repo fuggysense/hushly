@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
-import { supabase } from '@/lib/supabase';
+import { signUp } from '@/lib/clientAuth';
 import { C } from '@/lib/tokens';
 
 export default function SignUp() {
@@ -15,12 +15,12 @@ export default function SignUp() {
       return;
     }
     setBusy(true);
-    const { error, data } = await supabase.auth.signUp({ email, password });
+    const { error, data } = await signUp(email, password);
     setBusy(false);
     if (error) {
       Alert.alert('Sign-up failed', error.message);
     } else if (!data.session) {
-      Alert.alert('Check email', 'Confirm your email to finish signing up.');
+      Alert.alert('Sign-up failed', 'Could not start a session.');
     }
   }
 

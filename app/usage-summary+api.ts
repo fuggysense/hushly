@@ -1,9 +1,4 @@
-import {
-  authenticateRequest,
-  getSupabaseAdmin,
-  jsonError,
-  type RequestIdentity,
-} from '@/lib/serverAuth';
+import { authenticateRequest, type RequestIdentity } from '@/lib/serverAuth';
 
 type UsageRow = {
   route: string;
@@ -17,34 +12,29 @@ type UsageRow = {
 };
 
 export async function GET(request: Request) {
-  const admin = getSupabaseAdmin();
-  const auth = await authenticateRequest(request, admin);
+  const auth = await authenticateRequest(request);
   if (auth instanceof Response) return auth;
 
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  let query = auth.admin
-    .from('api_usage_events')
-    .select('route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at')
-    .gte('created_at', since)
-    .order('created_at', { ascending: false })
-    .limit(5000);
+  const identityFilter =
+    auth.identity.kind === 'api_key' ? 'api_key_id = $2' : 'user_id = $2';
+  const identityValue =
+    auth.identity.kind === 'api_key' ? auth.identity.apiKeyId : auth.identity.userId;
 
-  if (auth.identity.kind === 'api_key') {
-    query = query.eq('api_key_id', auth.identity.apiKeyId);
-  } else {
-    query = query.eq('user_id', auth.identity.userId);
-  }
-
-  const { data, error } = await query;
-  if (error) return jsonError(500, error.message);
-
-  const rows = (data ?? []) as UsageRow[];
+  const { rows } = await auth.db.query<UsageRow>(
+    `select route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at
+     from api_usage_events
+     where created_at >= $1 and ${identityFilter}
+     order by created_at desc
+     limit 5000`,
+    [since, identityValue]
+  );
   const todayStart = todayStartFromRequest(request);
 
   return Response.json(
     {
       identity: identityPayload(auth.identity),
-      today: summarize(rows.filter((row: UsageRow) => new Date(row.created_at) >= todayStart)),
+      today: summarize(rows.filter((row) => new Date(row.created_at) >= todayStart)),
       last30d: summarize(rows),
       recent: rows.slice(0, 20),
       updatedAt: new Date().toISOString(),

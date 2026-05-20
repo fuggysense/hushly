@@ -24,7 +24,7 @@ What it does:
 Default settings:
 - Shortcut: `Control + Option + Space`
 - Tablet text: `$10k/month`
-- API base: `https://hushly-six.vercel.app`
+- API base: `https://hushly.genflos.com`
 
 Permissions:
 - Microphone permission is required to record.
@@ -35,11 +35,11 @@ Storage:
 - The native Mac app stores transcripts locally at `~/Library/Application Support/Hushly/transcripts.json`.
 - Saved audio for retry is stored locally under `~/Library/Application Support/Hushly/Audio/`.
 - Custom tablet images are cropped and stored locally at `~/Library/Application Support/Hushly/tablet-background.png`.
-- Supabase history is used by the Expo app after sign-in; the native Mac app does not sync to Supabase yet.
+- Hushly web history is stored in the VPS Postgres database after sign-in; the native Mac app does not sync to the VPS database yet.
 
 Sharing:
 - Share the app bundle or a zipped copy of `dist/macos/Hushly.app`.
-- Do not share raw Deepgram or Anthropic API keys. The desktop app calls the API base in settings; by default that is `https://hushly-six.vercel.app`, where the server-side keys live in Vercel.
+- Do not share raw Deepgram or OpenAI API keys. The desktop app calls the API base in settings; by default that is `https://hushly.genflos.com`, where the server-side keys live on the Contabo VPS.
 - Anyone using that API base uses the owner's server-side API keys and quota, so keep the app private or add auth/rate limits before wider sharing.
 
 Source files:

@@ -23,7 +23,7 @@ import { StatusEyebrow } from '@/components/StatusEyebrow';
 import { TranscriptCard } from '@/components/TranscriptCard';
 import { Waveform } from '@/components/Waveform';
 import { useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { signOut } from '@/lib/clientAuth';
 import { finalizeAndCopy, persistTranscript, transcribe, uploadAudio } from '@/lib/api';
 import { useButtonSettings } from '@/lib/settings';
 import { C } from '@/lib/tokens';
@@ -307,7 +307,7 @@ export default function Home() {
             Admin
           </Link>
           <Pressable
-            onPress={() => supabase.auth.signOut()}
+            onPress={() => signOut()}
             accessibilityRole="button"
             accessibilityLabel={`Sign out ${email}`}
             style={styles.accountChip}

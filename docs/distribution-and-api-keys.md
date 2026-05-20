@@ -1,23 +1,24 @@
 # Hushly Distribution, API Keys, and Updates
 
-## Protecting the Vercel API
+## Protecting the Hushly API
 
 `/transcribe` and `/clean` now require one of these credentials:
 
-- A signed-in Supabase user session sent as `Authorization: Bearer <access-token>`.
+- A signed-in Hushly user session sent as `Authorization: Bearer <access-token>`.
 - A desktop/share key sent as `X-Hushly-API-Key: hsh_...`.
 
-Set these Vercel environment variables before deploying the protected routes:
+Set these VPS environment variables before deploying the protected routes:
 
 ```sh
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
+DATABASE_URL=...
 DEEPGRAM_API_KEY=...
-ANTHROPIC_API_KEY=...
+OPENAI_API_KEY=...
+CLEANUP_PROVIDER=openai
+CLEANUP_MODEL=gpt-5-nano
 HUSHLY_MASTER_KEY=<long random owner password>
 ```
 
-Apply `supabase/migrations/0004_api_keys_usage.sql` before the deployment handles real traffic.
+Run `npm run db:migrate` before the deployment handles real traffic.
 
 ## Creating Keys For Friends Or Users
 
@@ -39,11 +40,6 @@ The desktop app stores the entered API key locally in macOS user defaults and se
 
 ## Updates
 
-Without adding Sparkle or Electron, the low-RAM update path is GitHub Releases:
+Sparkle update files are hosted at `https://hushly.genflos.com/updates/`.
 
-1. Commit and push changes to GitHub.
-2. Build a new `Hushly.app`.
-3. Zip it and attach it to a new GitHub Release.
-4. Users click the latest release, download the new zip, and replace the app.
-
-For true in-app one-click auto-update later, add Sparkle to the native app and publish a signed appcast. That is a separate dependency and signing/notarization step.
+Do not replace `public/updates/appcast.xml` or the update ZIP unless Jerel explicitly approves shipping a Sparkle update.

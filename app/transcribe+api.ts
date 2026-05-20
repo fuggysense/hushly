@@ -4,7 +4,6 @@
 
 import {
   authenticateRequest,
-  getSupabaseAdmin,
   jsonError,
   recordUsage,
   type RequestIdentity,
@@ -14,13 +13,12 @@ const DG_URL = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=tru
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const admin = getSupabaseAdmin();
   let identity: RequestIdentity | null = null;
   let status = 200;
   let errorMessage = '';
   let audioBytes = 0;
 
-  const auth = await authenticateRequest(request, admin);
+  const auth = await authenticateRequest(request);
   if (auth instanceof Response) return auth;
   identity = auth.identity;
 
@@ -28,7 +26,7 @@ export async function POST(request: Request) {
   if (!key) {
     status = 500;
     errorMessage = 'DEEPGRAM_API_KEY not set on server';
-    await recordUsage(auth.admin, identity, {
+    await recordUsage(auth.db, identity, {
       route: '/transcribe',
       status,
       durationMs: Date.now() - startedAt,
@@ -43,7 +41,7 @@ export async function POST(request: Request) {
   if (body.byteLength === 0) {
     status = 400;
     errorMessage = 'empty body';
-    await recordUsage(auth.admin, identity, {
+    await recordUsage(auth.db, identity, {
       route: '/transcribe',
       status,
       durationMs: Date.now() - startedAt,
@@ -66,7 +64,7 @@ export async function POST(request: Request) {
     const errText = await dg.text();
     status = dg.status;
     errorMessage = `deepgram: ${errText.slice(0, 400)}`;
-    await recordUsage(auth.admin, identity, {
+    await recordUsage(auth.db, identity, {
       route: '/transcribe',
       status,
       durationMs: Date.now() - startedAt,
@@ -80,7 +78,7 @@ export async function POST(request: Request) {
   const transcript =
     dgJson?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '';
 
-  await recordUsage(auth.admin, identity, {
+  await recordUsage(auth.db, identity, {
     route: '/transcribe',
     status,
     durationMs: Date.now() - startedAt,

@@ -71,7 +71,7 @@ export default function History() {
   const onDelete = (row: Row) => {
     const doDelete = async () => {
       setBusyId(row.id);
-      const ok = await deleteTranscript(row.id, row.audio_path);
+      const ok = await deleteTranscript(row.id);
       setBusyId(null);
       if (ok) {
         setRows((prev) => prev.filter((r) => r.id !== row.id));

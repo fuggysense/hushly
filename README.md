@@ -1,6 +1,6 @@
 # Hushly
 
-Hushly is a low-RAM dictation app with a native macOS desktop client and Vercel API routes for transcription and cleanup.
+Hushly is a low-RAM dictation app with a native macOS desktop client and VPS-hosted API routes for transcription and cleanup.
 
 Operational docs:
 
