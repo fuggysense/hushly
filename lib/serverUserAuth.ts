@@ -48,15 +48,45 @@ export async function createUserSession(emailInput: string, password: string) {
 
 export async function signInUser(emailInput: string, password: string) {
   const email = normalizeEmail(emailInput);
-  const { rows } = await getDb().query<UserRow>(
+  const db = getDb();
+  const { rows } = await db.query<UserRow>(
     'select id, email, password_hash, password_salt from app_users where email = $1',
     [email]
   );
   const user = rows[0];
-  if (!user || !verifyPassword(password, user.password_salt, user.password_hash)) {
-    throw statusError(401, 'invalid email or password');
+  if (user && verifyPassword(password, user.password_salt, user.password_hash)) {
+    return createSession({ id: user.id, email: user.email });
   }
-  return createSession({ id: user.id, email: user.email });
+
+  const legacyUser = await verifyLegacySupabasePassword(email, password);
+  if (legacyUser) {
+    const salt = randomBytes(16).toString('base64');
+    const passwordHash = hashPassword(password, salt);
+    if (user) {
+      const { rows: updatedRows } = await db.query<AuthUser>(
+        `update app_users
+         set password_hash = $2, password_salt = $3, updated_at = now()
+         where id = $1
+         returning id, email`,
+        [user.id, passwordHash, salt]
+      );
+      return createSession(updatedRows[0]);
+    }
+
+    const { rows: createdRows } = await db.query<AuthUser>(
+      `insert into app_users (email, password_hash, password_salt)
+       values ($1, $2, $3)
+       on conflict (email) do update
+       set password_hash = excluded.password_hash,
+           password_salt = excluded.password_salt,
+           updated_at = now()
+       returning id, email`,
+      [legacyUser.email, passwordHash, salt]
+    );
+    return createSession(createdRows[0]);
+  }
+
+  throw statusError(401, 'invalid email or password');
 }
 
 export async function validateSessionToken(token: string): Promise<AuthUser | null> {
@@ -116,4 +146,35 @@ async function createSession(user: AuthUser): Promise<AuthSession> {
 
 function isUniqueViolation(error: unknown) {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === '23505');
+}
+
+async function verifyLegacySupabasePassword(email: string, password: string): Promise<AuthUser | null> {
+  const supabaseUrl = process.env.LEGACY_SUPABASE_URL ?? process.env.SUPABASE_URL;
+  const anonKey =
+    process.env.LEGACY_SUPABASE_ANON_KEY ?? process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey || !email || !password) return null;
+
+  try {
+    const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: {
+        apikey: anonKey,
+        authorization: `Bearer ${anonKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as {
+      user?: {
+        id?: string;
+        email?: string;
+      };
+    };
+    const legacyEmail = normalizeEmail(payload.user?.email ?? email);
+    if (!legacyEmail) return null;
+    return { id: payload.user?.id ?? legacyEmail, email: legacyEmail };
+  } catch {
+    return null;
+  }
 }
