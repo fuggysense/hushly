@@ -29,21 +29,19 @@ export async function createUserSession(emailInput: string, password: string) {
   if (!email) throw statusError(400, 'email required');
   if (password.length < 8) throw statusError(400, 'password must be at least 8 characters');
 
-  const salt = randomBytes(16).toString('base64');
-  const passwordHash = hashPassword(password, salt);
-
   try {
-    const { rows } = await getDb().query<AuthUser>(
-      `insert into app_users (email, password_hash, password_salt)
-       values ($1, $2, $3)
-       returning id, email`,
-      [email, passwordHash, salt]
-    );
-    return createSession(rows[0]);
+    return createSession(await insertOrUpdateUserPassword(email, password, false));
   } catch (error) {
     if (isUniqueViolation(error)) throw statusError(409, 'email already exists');
     throw error;
   }
+}
+
+export async function upsertUserPassword(emailInput: string, password: string) {
+  const email = normalizeEmail(emailInput);
+  if (!email) throw statusError(400, 'email required');
+  if (password.length < 8) throw statusError(400, 'password must be at least 8 characters');
+  return insertOrUpdateUserPassword(email, password, true);
 }
 
 export async function signInUser(emailInput: string, password: string) {
@@ -60,30 +58,7 @@ export async function signInUser(emailInput: string, password: string) {
 
   const legacyUser = await verifyLegacySupabasePassword(email, password);
   if (legacyUser) {
-    const salt = randomBytes(16).toString('base64');
-    const passwordHash = hashPassword(password, salt);
-    if (user) {
-      const { rows: updatedRows } = await db.query<AuthUser>(
-        `update app_users
-         set password_hash = $2, password_salt = $3, updated_at = now()
-         where id = $1
-         returning id, email`,
-        [user.id, passwordHash, salt]
-      );
-      return createSession(updatedRows[0]);
-    }
-
-    const { rows: createdRows } = await db.query<AuthUser>(
-      `insert into app_users (email, password_hash, password_salt)
-       values ($1, $2, $3)
-       on conflict (email) do update
-       set password_hash = excluded.password_hash,
-           password_salt = excluded.password_salt,
-           updated_at = now()
-       returning id, email`,
-      [legacyUser.email, passwordHash, salt]
-    );
-    return createSession(createdRows[0]);
+    return createSession(await insertOrUpdateUserPassword(legacyUser.email, password, true));
   }
 
   throw statusError(401, 'invalid email or password');
@@ -118,6 +93,26 @@ function normalizeEmail(value: string) {
 
 function hashPassword(password: string, salt: string) {
   return pbkdf2Sync(password, salt, ITERATIONS, KEY_LENGTH, DIGEST).toString('base64');
+}
+
+async function insertOrUpdateUserPassword(email: string, password: string, upsert: boolean) {
+  const salt = randomBytes(16).toString('base64');
+  const passwordHash = hashPassword(password, salt);
+  const conflict = upsert
+    ? `on conflict (email) do update
+       set password_hash = excluded.password_hash,
+           password_salt = excluded.password_salt,
+           updated_at = now()`
+    : '';
+
+  const { rows } = await getDb().query<AuthUser>(
+    `insert into app_users (email, password_hash, password_salt)
+     values ($1, $2, $3)
+     ${conflict}
+     returning id, email`,
+    [email, passwordHash, salt]
+  );
+  return rows[0];
 }
 
 function verifyPassword(password: string, salt: string, expectedHash: string) {

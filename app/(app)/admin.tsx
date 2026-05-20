@@ -36,6 +36,8 @@ export default function Admin() {
   const [createdKey, setCreatedKey] = useState('');
   const [keys, setKeys] = useState<APIKeyRow[]>([]);
   const [usage, setUsage] = useState<UsageRow[]>([]);
+  const [userEmail, setUserEmail] = useState('');
+  const [userPassword, setUserPassword] = useState('');
 
   const callAdmin = useCallback(async (body: Record<string, unknown>, keyOverride?: string) => {
     const adminKey = (keyOverride ?? masterKey).trim();
@@ -121,6 +123,16 @@ export default function Admin() {
     }
   };
 
+  const resetUserPassword = async () => {
+    try {
+      await callAdmin({ action: 'upsertUser', email: userEmail, password: userPassword });
+      setUserPassword('');
+      setStatus('Sign-in saved for this email.');
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const copyCreatedKey = async () => {
     if (!createdKey) return;
     await Clipboard.setStringAsync(createdKey);
@@ -175,6 +187,30 @@ export default function Admin() {
             </Pressable>
           </View>
           <Text style={styles.status}>{status || 'Enter the server master key.'}</Text>
+        </TranscriptCard>
+
+        <TranscriptCard style={styles.card}>
+          <Text style={styles.eyebrow}>Create or reset sign-in</Text>
+          <TextInput
+            value={userEmail}
+            onChangeText={setUserEmail}
+            style={styles.input}
+            placeholder="Email"
+            placeholderTextColor={C.textMuted}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          <TextInput
+            value={userPassword}
+            onChangeText={setUserPassword}
+            secureTextEntry
+            style={styles.input}
+            placeholder="New password (8+ chars)"
+            placeholderTextColor={C.textMuted}
+          />
+          <Pressable style={styles.primary} onPress={resetUserPassword}>
+            <Text style={styles.primaryText}>Save sign-in</Text>
+          </Pressable>
         </TranscriptCard>
 
         <TranscriptCard style={styles.card}>

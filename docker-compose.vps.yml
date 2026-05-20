@@ -27,7 +27,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - .env.vps
+      - ${HUSHLY_ENV_FILE:-/opt/hushly/.env}
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-hushly}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hushly}
       HUSHLY_AUDIO_DIR: /data/audio
@@ -45,7 +45,7 @@ services:
       - "80:80"
       - "443:443"
     env_file:
-      - .env.vps
+      - ${HUSHLY_ENV_FILE:-/opt/hushly/.env}
     environment:
       HUSHLY_HOSTNAME: ${HUSHLY_HOSTNAME:-hushly.genflos.com}
       ACME_EMAIL: ${ACME_EMAIL}
@@ -63,7 +63,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - .env.vps
+      - ${HUSHLY_ENV_FILE:-/opt/hushly/.env}
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-hushly}

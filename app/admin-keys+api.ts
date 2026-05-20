@@ -1,7 +1,8 @@
 import { createPlainAPIKey, jsonError } from '@/lib/serverAuth';
 import { getDb } from '@/lib/serverDb';
+import { upsertUserPassword } from '@/lib/serverUserAuth';
 
-type AdminAction = 'list' | 'create' | 'revoke' | 'delete' | 'usage';
+type AdminAction = 'list' | 'create' | 'revoke' | 'delete' | 'usage' | 'upsertUser';
 
 type AdminBody = {
   action?: AdminAction;
@@ -10,6 +11,8 @@ type AdminBody = {
   user_id?: string;
   id?: string;
   days?: number;
+  email?: string;
+  password?: string;
 };
 
 type KeyRow = {
@@ -69,6 +72,8 @@ export async function POST(request: Request) {
       return deleteKey(body);
     case 'usage':
       return listUsage(body);
+    case 'upsertUser':
+      return upsertUser(body);
     case 'list': {
       const { rows } = await db.query<KeyRow>(
         `select id, label, tag, user_id, key_prefix, status, created_at, last_used_at
@@ -80,6 +85,19 @@ export async function POST(request: Request) {
     }
     default:
       return jsonError(400, 'unknown action');
+  }
+}
+
+async function upsertUser(body: AdminBody) {
+  try {
+    const user = await upsertUserPassword(body.email ?? '', body.password ?? '');
+    return Response.json({ user }, { headers: NO_STORE });
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && 'status' in error && typeof error.status === 'number'
+        ? error.status
+        : 500;
+    return jsonError(status, error instanceof Error ? error.message : String(error));
   }
 }
 
