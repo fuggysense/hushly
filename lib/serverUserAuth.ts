@@ -9,6 +9,7 @@ const SESSION_DAYS = 30;
 export type AuthUser = {
   id: string;
   email: string;
+  can_manage_api_keys?: boolean;
 };
 
 export type AuthSession = {
@@ -22,6 +23,7 @@ type UserRow = {
   email: string;
   password_hash: string;
   password_salt: string;
+  can_manage_api_keys: boolean;
 };
 
 export async function createUserSession(emailInput: string, password: string) {
@@ -48,12 +50,18 @@ export async function signInUser(emailInput: string, password: string) {
   const email = normalizeEmail(emailInput);
   const db = getDb();
   const { rows } = await db.query<UserRow>(
-    'select id, email, password_hash, password_salt from app_users where email = $1',
+    `select id, email, password_hash, password_salt, can_manage_api_keys
+     from app_users
+     where email = $1`,
     [email]
   );
   const user = rows[0];
   if (user && verifyPassword(password, user.password_salt, user.password_hash)) {
-    return createSession({ id: user.id, email: user.email });
+    return createSession({
+      id: user.id,
+      email: user.email,
+      can_manage_api_keys: user.can_manage_api_keys,
+    });
   }
 
   const legacyUser = await verifyLegacySupabasePassword(email, password);
@@ -67,7 +75,7 @@ export async function signInUser(emailInput: string, password: string) {
 export async function validateSessionToken(token: string): Promise<AuthUser | null> {
   const tokenHash = hashToken(token);
   const { rows } = await getDb().query<AuthUser>(
-    `select u.id, u.email
+    `select u.id, u.email, u.can_manage_api_keys
      from auth_sessions s
      join app_users u on u.id = s.user_id
      where s.token_hash = $1 and s.expires_at > now()

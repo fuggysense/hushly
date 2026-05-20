@@ -6,6 +6,7 @@ export type RequestIdentity =
       kind: 'user';
       userId: string;
       email: string | null;
+      canManageApiKeys: boolean;
     }
   | {
       kind: 'api_key';
@@ -57,6 +58,7 @@ export async function authenticateRequest(
         kind: 'user',
         userId: user.id,
         email: user.email,
+        canManageApiKeys: Boolean(user.can_manage_api_keys),
       },
     };
   }

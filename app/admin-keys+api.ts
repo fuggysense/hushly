@@ -1,6 +1,6 @@
 import { createPlainAPIKey, jsonError } from '@/lib/serverAuth';
 import { getDb } from '@/lib/serverDb';
-import { upsertUserPassword } from '@/lib/serverUserAuth';
+import { upsertUserPassword, validateSessionToken } from '@/lib/serverUserAuth';
 
 type AdminAction = 'list' | 'create' | 'revoke' | 'delete' | 'usage' | 'upsertUser';
 
@@ -13,6 +13,7 @@ type AdminBody = {
   days?: number;
   email?: string;
   password?: string;
+  can_manage_api_keys?: boolean;
 };
 
 type KeyRow = {
@@ -45,14 +46,8 @@ type UsageRow = {
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
 export async function POST(request: Request) {
-  const master = process.env.HUSHLY_MASTER_KEY;
-  if (!master) return jsonError(500, 'HUSHLY_MASTER_KEY not set on server');
-
-  const provided =
-    request.headers.get('x-hushly-master-key') ??
-    request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
-    '';
-  if (provided !== master) return jsonError(401, 'invalid master key');
+  const access = await authenticateAdmin(request);
+  if (access instanceof Response) return access;
 
   let body: AdminBody = {};
   try {
@@ -61,37 +56,86 @@ export async function POST(request: Request) {
     return jsonError(400, 'invalid JSON');
   }
 
-  const db = getDb();
-
   switch (body.action ?? 'list') {
     case 'create':
-      return createKey(body);
+      return createKey(body, access);
     case 'revoke':
-      return updateKeyStatus(body, 'revoked');
+      return updateKeyStatus(body, 'revoked', access);
     case 'delete':
-      return deleteKey(body);
+      return deleteKey(body, access);
     case 'usage':
-      return listUsage(body);
+      return listUsage(body, access);
     case 'upsertUser':
-      return upsertUser(body);
-    case 'list': {
-      const { rows } = await db.query<KeyRow>(
-        `select id, label, tag, user_id, key_prefix, status, created_at, last_used_at
-         from app_api_keys
-         order by created_at desc
-         limit 500`
-      );
-      return Response.json({ keys: rows }, { headers: NO_STORE });
-    }
+      return upsertUser(body, access);
+    case 'list':
+      return listKeys(access);
     default:
       return jsonError(400, 'unknown action');
   }
 }
 
-async function upsertUser(body: AdminBody) {
+type AdminAccess = {
+  userId: string;
+  email: string;
+  isOwner: boolean;
+  canManageApiKeys: boolean;
+};
+
+async function authenticateAdmin(request: Request): Promise<AdminAccess | Response> {
+  const authorization = request.headers.get('authorization') ?? '';
+  const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (!bearer) return jsonError(401, 'sign-in required');
+
+  const user = await validateSessionToken(bearer);
+  if (!user) return jsonError(401, 'invalid access token');
+
+  const { rows } = await getDb().query<{
+    email: string;
+    can_manage_api_keys: boolean;
+  }>('select email, can_manage_api_keys from app_users where id = $1 limit 1', [user.id]);
+  const current = rows[0];
+  if (!current) return jsonError(401, 'invalid access token');
+
+  const email = normalizeEmail(current.email || user.email);
+  const isOwner = ownerEmails().has(email);
+  return {
+    userId: user.id,
+    email,
+    isOwner,
+    canManageApiKeys: isOwner || Boolean(current.can_manage_api_keys),
+  };
+}
+
+function requireApiKeyAccess(access: AdminAccess) {
+  if (!access.canManageApiKeys) return jsonError(403, 'API key access not enabled for this account');
+  return null;
+}
+
+function requireOwner(access: AdminAccess) {
+  if (!access.isOwner) return jsonError(403, 'owner access required');
+  return null;
+}
+
+async function upsertUser(body: AdminBody, access: AdminAccess) {
+  const denied = requireOwner(access);
+  if (denied) return denied;
+
   try {
     const user = await upsertUserPassword(body.email ?? '', body.password ?? '');
-    return Response.json({ user }, { headers: NO_STORE });
+    const canManageApiKeys = Boolean(body.can_manage_api_keys);
+    await getDb().query('update app_users set can_manage_api_keys = $2 where id = $1', [
+      user.id,
+      canManageApiKeys,
+    ]);
+    return Response.json(
+      {
+        user: {
+          ...user,
+          can_manage_api_keys: canManageApiKeys,
+        },
+      },
+      { headers: NO_STORE }
+    );
   } catch (error) {
     const status =
       error && typeof error === 'object' && 'status' in error && typeof error.status === 'number'
@@ -101,73 +145,116 @@ async function upsertUser(body: AdminBody) {
   }
 }
 
-async function createKey(body: AdminBody) {
+async function listKeys(access: AdminAccess) {
+  const denied = requireApiKeyAccess(access);
+  if (denied) return denied;
+
+  const params: unknown[] = [];
+  const filter = access.isOwner ? '' : 'where user_id = $1';
+  if (!access.isOwner) params.push(access.userId);
+
+  const { rows } = await getDb().query<KeyRow>(
+    `select id, label, tag, user_id, key_prefix, status, created_at, last_used_at
+     from app_api_keys
+     ${filter}
+     order by created_at desc
+     limit 500`,
+    params
+  );
+  return Response.json({ access, keys: rows }, { headers: NO_STORE });
+}
+
+async function createKey(body: AdminBody, access: AdminAccess) {
+  const denied = requireApiKeyAccess(access);
+  if (denied) return denied;
+
   const label = body.label?.trim();
   if (!label) return jsonError(400, 'label required');
+  const userId = access.isOwner ? cleanOptional(body.user_id) ?? access.userId : access.userId;
 
   const key = await createPlainAPIKey();
   const { rows } = await getDb().query<KeyRow>(
     `insert into app_api_keys (label, tag, user_id, key_hash, key_prefix)
      values ($1, $2, $3, $4, $5)
      returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
-    [label, cleanOptional(body.tag), cleanOptional(body.user_id), key.hash, key.prefix]
+    [label, cleanOptional(body.tag), userId, key.hash, key.prefix]
   );
 
   return Response.json({ key: key.secret, record: rows[0] }, { headers: NO_STORE });
 }
 
-async function updateKeyStatus(body: AdminBody, status: string) {
+async function updateKeyStatus(body: AdminBody, status: string, access: AdminAccess) {
+  const denied = requireApiKeyAccess(access);
+  if (denied) return denied;
   if (!body.id) return jsonError(400, 'id required');
+
+  const params: unknown[] = [body.id, status];
+  const tenantFilter = tenantWhere(access, params);
   const { rows } = await getDb().query<KeyRow>(
     `update app_api_keys
      set status = $2
-     where id = $1
+     where id = $1 ${tenantFilter}
      returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
-    [body.id, status]
+    params
   );
   if (!rows[0]) return jsonError(404, 'key not found');
   return Response.json({ record: rows[0] }, { headers: NO_STORE });
 }
 
-async function deleteKey(body: AdminBody) {
+async function deleteKey(body: AdminBody, access: AdminAccess) {
+  const denied = requireApiKeyAccess(access);
+  if (denied) return denied;
   if (!body.id) return jsonError(400, 'id required');
+
+  const params: unknown[] = [body.id];
+  const tenantFilter = tenantWhere(access, params);
   const { rows } = await getDb().query<KeyRow>(
     `delete from app_api_keys
-     where id = $1 and status = 'revoked'
+     where id = $1 and status = 'revoked' ${tenantFilter}
      returning id, label, tag, user_id, key_prefix, status, created_at, last_used_at`,
-    [body.id]
+    params
   );
   if (!rows[0]) return jsonError(400, 'only revoked keys can be deleted');
   return Response.json({ record: rows[0] }, { headers: NO_STORE });
 }
 
-async function listUsage(body: AdminBody) {
+async function listUsage(body: AdminBody, access: AdminAccess) {
+  const denied = requireApiKeyAccess(access);
+  if (denied) return denied;
+
   const days = Math.max(1, Math.min(365, body.days ?? 30));
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const params: unknown[] = [since];
-  let keyFilter = '';
+  const filters = ['created_at >= $1'];
+  if (!access.isOwner) {
+    params.push(access.userId);
+    filters.push(`user_id = $${params.length}`);
+  }
   if (body.id) {
     params.push(body.id);
-    keyFilter = 'and api_key_id = $2';
+    filters.push(`api_key_id = $${params.length}`);
   }
 
   const { rows } = await getDb().query<UsageRow>(
     `select api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status,
             duration_ms, audio_bytes, input_chars, output_chars, error, created_at
      from api_usage_events
-     where created_at >= $1 ${keyFilter}
+     where ${filters.join(' and ')}
      order by created_at desc
      limit 10000`,
     params
   );
 
+  const keyParams: unknown[] = [];
+  const keyFilter = access.isOwner ? '' : 'where user_id = $1';
+  if (!access.isOwner) keyParams.push(access.userId);
   const { rows: keyRows } = await getDb().query<{
     id: string;
     label: string;
     tag: string | null;
     key_prefix: string;
     status: string;
-  }>('select id, label, tag, key_prefix, status from app_api_keys limit 1000');
+  }>(`select id, label, tag, key_prefix, status from app_api_keys ${keyFilter} limit 1000`, keyParams);
   const keysById = new Map(keyRows.map((key) => [key.id, key]));
 
   return Response.json(
@@ -254,4 +341,23 @@ function summarizeByIdentity(rows: UsageRow[]) {
 function cleanOptional(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function tenantWhere(access: AdminAccess, params: unknown[]) {
+  if (access.isOwner) return '';
+  params.push(access.userId);
+  return `and user_id = $${params.length}`;
+}
+
+function normalizeEmail(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function ownerEmails() {
+  return new Set(
+    (process.env.HUSHLY_OWNER_EMAILS ?? '')
+      .split(',')
+      .map((email) => normalizeEmail(email))
+      .filter(Boolean)
+  );
 }

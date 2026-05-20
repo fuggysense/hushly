@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Link } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { TranscriptCard } from '@/components/TranscriptCard';
+import { getStoredSession } from '@/lib/clientAuth';
 import { C } from '@/lib/tokens';
 
 type APIKeyRow = {
@@ -25,11 +26,14 @@ type UsageRow = {
   key?: { label: string; tag: string | null; key_prefix: string; status: string } | null;
 };
 
-const ADMIN_MASTER_KEY_STORAGE = 'hushly:admin-master-key';
+type AdminAccess = {
+  email: string;
+  isOwner: boolean;
+  canManageApiKeys: boolean;
+};
 
 export default function Admin() {
-  const loadedStoredKey = useRef(false);
-  const [masterKey, setMasterKey] = useState('');
+  const [access, setAccess] = useState<AdminAccess | null>(null);
   const [label, setLabel] = useState('');
   const [tag, setTag] = useState('');
   const [status, setStatus] = useState('');
@@ -38,17 +42,18 @@ export default function Admin() {
   const [usage, setUsage] = useState<UsageRow[]>([]);
   const [userEmail, setUserEmail] = useState('');
   const [userPassword, setUserPassword] = useState('');
+  const [userCanManageKeys, setUserCanManageKeys] = useState(true);
 
-  const callAdmin = useCallback(async (body: Record<string, unknown>, keyOverride?: string) => {
-    const adminKey = (keyOverride ?? masterKey).trim();
-    if (!adminKey) throw new Error('master key required');
+  const callAdmin = useCallback(async (body: Record<string, unknown>) => {
+    const session = await getStoredSession();
+    if (!session) throw new Error('sign-in required');
 
     setStatus('Loading...');
     const res = await fetch('/admin-keys', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Hushly-Master-Key': adminKey,
+        Authorization: `Bearer ${session.access_token}`,
       },
       body: JSON.stringify(body),
     });
@@ -56,60 +61,35 @@ export default function Admin() {
     if (!res.ok) throw new Error(json.error ?? `admin ${res.status}`);
     setStatus('Ready');
     return json;
-  }, [masterKey]);
+  }, []);
 
-  const listKeys = useCallback(async (keyOverride?: string) => {
+  const listKeys = useCallback(async () => {
     try {
-      const json = await callAdmin({ action: 'list' }, keyOverride);
+      const json = await callAdmin({ action: 'list' });
+      setAccess(json.access ?? null);
       setKeys(json.keys ?? []);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
   }, [callAdmin]);
 
-  const loadUsage = useCallback(async (keyOverride?: string) => {
+  const loadUsage = useCallback(async () => {
     try {
-      const json = await callAdmin({ action: 'usage', days: 30 }, keyOverride);
+      const json = await callAdmin({ action: 'usage', days: 30 });
       setUsage(json.summary ?? []);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
   }, [callAdmin]);
 
-  const refreshAdmin = useCallback(async (keyOverride?: string) => {
-    await listKeys(keyOverride);
-    await loadUsage(keyOverride);
+  const refreshAdmin = useCallback(async () => {
+    await listKeys();
+    await loadUsage();
   }, [listKeys, loadUsage]);
 
   useEffect(() => {
-    if (loadedStoredKey.current || typeof window === 'undefined') return;
-    loadedStoredKey.current = true;
-    const stored = window.localStorage.getItem(ADMIN_MASTER_KEY_STORAGE);
-    if (!stored) return;
-    setMasterKey(stored);
-    void refreshAdmin(stored);
+    void refreshAdmin();
   }, [refreshAdmin]);
-
-  const updateMasterKey = (value: string) => {
-    setMasterKey(value);
-    if (typeof window === 'undefined') return;
-    if (value.trim()) {
-      window.localStorage.setItem(ADMIN_MASTER_KEY_STORAGE, value);
-    } else {
-      window.localStorage.removeItem(ADMIN_MASTER_KEY_STORAGE);
-    }
-  };
-
-  const forgetMasterKey = () => {
-    setMasterKey('');
-    setKeys([]);
-    setUsage([]);
-    setCreatedKey('');
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(ADMIN_MASTER_KEY_STORAGE);
-    }
-    setStatus('Master key forgotten on this browser.');
-  };
 
   const createKey = async () => {
     try {
@@ -125,7 +105,12 @@ export default function Admin() {
 
   const resetUserPassword = async () => {
     try {
-      await callAdmin({ action: 'upsertUser', email: userEmail, password: userPassword });
+      await callAdmin({
+        action: 'upsertUser',
+        email: userEmail,
+        password: userPassword,
+        can_manage_api_keys: userCanManageKeys,
+      });
       setUserPassword('');
       setStatus('Sign-in saved for this email.');
     } catch (e) {
@@ -169,70 +154,80 @@ export default function Admin() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <TranscriptCard style={styles.card}>
-          <Text style={styles.eyebrow}>Master key</Text>
-          <TextInput
-            value={masterKey}
-            onChangeText={updateMasterKey}
-            secureTextEntry
-            style={styles.input}
-            placeholder="HUSHLY_MASTER_KEY"
-            placeholderTextColor={C.textMuted}
-          />
+          <Text style={styles.eyebrow}>Access</Text>
+          <Text style={styles.line}>{access?.email ?? 'Signed-in account'}</Text>
+          <Text style={styles.line}>
+            {access?.isOwner ? 'Owner' : access?.canManageApiKeys ? 'API key manager' : 'No API key access'}
+          </Text>
           <View style={styles.actions}>
             <Pressable style={styles.secondary} onPress={() => refreshAdmin()}>
               <Text style={styles.secondaryText}>Refresh</Text>
             </Pressable>
-            <Pressable style={styles.secondary} onPress={forgetMasterKey}>
-              <Text style={styles.secondaryText}>Forget</Text>
-            </Pressable>
           </View>
-          <Text style={styles.status}>{status || 'Enter the server master key.'}</Text>
+          <Text style={styles.status}>{status || 'Ready'}</Text>
         </TranscriptCard>
 
-        <TranscriptCard style={styles.card}>
-          <Text style={styles.eyebrow}>Create or reset sign-in</Text>
-          <TextInput
-            value={userEmail}
-            onChangeText={setUserEmail}
-            style={styles.input}
-            placeholder="Email"
-            placeholderTextColor={C.textMuted}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-          <TextInput
-            value={userPassword}
-            onChangeText={setUserPassword}
-            secureTextEntry
-            style={styles.input}
-            placeholder="New password (8+ chars)"
-            placeholderTextColor={C.textMuted}
-          />
-          <Pressable style={styles.primary} onPress={resetUserPassword}>
-            <Text style={styles.primaryText}>Save sign-in</Text>
-          </Pressable>
-        </TranscriptCard>
+        {access?.isOwner ? (
+          <TranscriptCard style={styles.card}>
+            <Text style={styles.eyebrow}>Create or reset sign-in</Text>
+            <TextInput
+              value={userEmail}
+              onChangeText={setUserEmail}
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor={C.textMuted}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TextInput
+              value={userPassword}
+              onChangeText={setUserPassword}
+              secureTextEntry
+              style={styles.input}
+              placeholder="New password (8+ chars)"
+              placeholderTextColor={C.textMuted}
+            />
+            <Pressable
+              style={[styles.secondary, userCanManageKeys && styles.selectedToggle]}
+              onPress={() => setUserCanManageKeys((value) => !value)}
+            >
+              <Text style={styles.secondaryText}>
+                {userCanManageKeys ? 'API key access on' : 'API key access off'}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.primary} onPress={resetUserPassword}>
+              <Text style={styles.primaryText}>Save sign-in</Text>
+            </Pressable>
+          </TranscriptCard>
+        ) : null}
 
-        <TranscriptCard style={styles.card}>
-          <Text style={styles.eyebrow}>Create API key</Text>
-          <TextInput
-            value={label}
-            onChangeText={setLabel}
-            style={styles.input}
-            placeholder="Label"
-            placeholderTextColor={C.textMuted}
-          />
-          <TextInput
-            value={tag}
-            onChangeText={setTag}
-            style={styles.input}
-            placeholder="Tag"
-            placeholderTextColor={C.textMuted}
-          />
-          <Pressable style={styles.primary} onPress={createKey}>
-            <Text style={styles.primaryText}>Create</Text>
-          </Pressable>
-        </TranscriptCard>
+        {access?.canManageApiKeys ? (
+          <TranscriptCard style={styles.card}>
+            <Text style={styles.eyebrow}>Create API key</Text>
+            <TextInput
+              value={label}
+              onChangeText={setLabel}
+              style={styles.input}
+              placeholder="Label"
+              placeholderTextColor={C.textMuted}
+            />
+            <TextInput
+              value={tag}
+              onChangeText={setTag}
+              style={styles.input}
+              placeholder="Tag"
+              placeholderTextColor={C.textMuted}
+            />
+            <Pressable style={styles.primary} onPress={createKey}>
+              <Text style={styles.primaryText}>Create</Text>
+            </Pressable>
+          </TranscriptCard>
+        ) : (
+          <TranscriptCard style={styles.card}>
+            <Text style={styles.eyebrow}>API key access</Text>
+            <Text style={styles.line}>This signed-in account cannot create or manage API keys.</Text>
+          </TranscriptCard>
+        )}
 
         {createdKey ? (
           <TranscriptCard style={styles.createdCard}>
@@ -247,14 +242,16 @@ export default function Admin() {
           </TranscriptCard>
         ) : null}
 
-        <View style={styles.actions}>
-          <Pressable style={styles.secondary} onPress={() => listKeys()}>
-            <Text style={styles.secondaryText}>List keys</Text>
-          </Pressable>
-          <Pressable style={styles.secondary} onPress={() => loadUsage()}>
-            <Text style={styles.secondaryText}>Usage</Text>
-          </Pressable>
-        </View>
+        {access?.canManageApiKeys ? (
+          <View style={styles.actions}>
+            <Pressable style={styles.secondary} onPress={() => listKeys()}>
+              <Text style={styles.secondaryText}>List keys</Text>
+            </Pressable>
+            <Pressable style={styles.secondary} onPress={() => loadUsage()}>
+              <Text style={styles.secondaryText}>Usage</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {keys.map((key) => (
           <TranscriptCard key={key.id} style={styles.card}>
@@ -355,6 +352,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
   },
+  selectedToggle: { borderColor: C.accent },
   secondaryText: { color: C.textSecondary, fontFamily: 'Inter-Medium', fontSize: 13 },
   secondaryDanger: {
     alignItems: 'center',

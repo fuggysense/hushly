@@ -16,13 +16,12 @@ function Gate() {
   useEffect(() => {
     if (loading) return;
     const inAuth = segments[0] === '(auth)';
-    const inAdmin = (segments as readonly string[]).includes('admin');
-    if (!session && !inAuth && !inAdmin) {
+    if (!session && !inAuth) {
       router.replace('/(auth)/sign-in');
     } else if (session && inAuth) {
       router.replace('/(app)');
     }
-  }, [session, loading, segments]);
+  }, [session, loading, segments, router]);
 
   if (loading) {
     return (
