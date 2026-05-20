@@ -58,6 +58,7 @@ jobs:
           docker compose -f docker-compose.vps.yml --env-file .env.vps build app
           docker compose -f docker-compose.vps.yml --env-file .env.vps up -d postgres
           docker compose -f docker-compose.vps.yml --env-file .env.vps run --rm app npm run db:migrate
-          docker compose -f docker-compose.vps.yml --env-file .env.vps up -d app caddy backup
+          docker compose -f docker-compose.vps.yml --env-file .env.vps up -d --force-recreate app
+          docker compose -f docker-compose.vps.yml --env-file .env.vps up -d caddy backup
           docker compose -f docker-compose.vps.yml --env-file .env.vps ps
           EOF
