@@ -30,3 +30,12 @@ This file tracks local changes that have not been shipped through Sparkle.
 - Change: add a recording-on tablet preview to the Settings page using the same renderer as the floating dictation tablet.
 - Reversible by: reverting the git commit that contains this entry and the matching `desktop/macos/HushlyLite.swift` changes.
 - Sparkle approval: not requested.
+
+### OpenAI Cleanup Provider
+
+- Status: local/API backend only, not shipped to Sparkle.
+- Major-change count: 1.
+- Scope: Vercel API cleanup and retry routes.
+- Change: route transcript cleanup through `OPENAI_API_KEY` with `CLEANUP_PROVIDER=openai` and `CLEANUP_MODEL=gpt-5-nano`; `/retry` now reuses the same cleanup helper as `/clean`.
+- Reversible by: reverting the git commit that contains this entry and the matching `app/clean+api.ts`, `app/retry+api.ts`, `lib/serverCleanup.ts`, and `.env.example` changes.
+- Sparkle approval: not requested.

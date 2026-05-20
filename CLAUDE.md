@@ -27,7 +27,7 @@ For desktop QA, run `scripts/build-macos-app.sh` and then verify the bundle with
 
 ## Architecture
 
-Hushly is an AI dictation app: record → Deepgram transcribe → Claude Haiku cleanup → copy to clipboard → persist to Supabase. It ships as one Expo Router codebase that runs on **iOS, Android, and web from the same `app/` tree**, plus a separate native **iOS keyboard extension** target and a lightweight native **macOS AppKit desktop app**.
+Hushly is an AI dictation app: record → Deepgram transcribe → OpenAI cleanup → copy to clipboard → persist to Supabase. It ships as one Expo Router codebase that runs on **iOS, Android, and web from the same `app/` tree**, plus a separate native **iOS keyboard extension** target and a lightweight native **macOS AppKit desktop app**.
 
 ### Routing (Expo Router 6, file-based)
 
@@ -43,7 +43,7 @@ Files matching `app/*+api.ts` are server-only route handlers exporting `POST(req
 The four routes form one pipeline:
 
 1. **`/transcribe`** — Receives raw audio bytes (Content-Type set by client: `audio/m4a` native, `audio/webm` web). Proxies to Deepgram Nova-3 prerecorded endpoint. Returns `{ transcript }`. No auth required.
-2. **`/clean`** — Receives `{ text, mode?, target_app?, vocabulary?, context? }`. Calls Anthropic `claude-haiku-4-5-20251001` with a hardcoded **TEXT-CLEANUP UTILITY** system prompt that explicitly refuses to act on the transcript content (treats it as data, never instruction). Returns `{ cleaned }`. No auth required.
+2. **`/clean`** — Receives `{ text, mode?, target_app?, vocabulary?, context? }`. Calls the server cleanup helper in `lib/serverCleanup.ts`, currently defaulting to OpenAI `gpt-5-nano` via `OPENAI_API_KEY`, `CLEANUP_PROVIDER=openai`, and `CLEANUP_MODEL=gpt-5-nano`. The cleanup prompt explicitly refuses to act on the transcript content (treats it as data, never instruction). Returns `{ cleaned }`.
 3. **`/persist`** — Bearer JWT required. Uses service-role client (`SUPABASE_SERVICE_ROLE_KEY`) to verify the user, then inserts a row in `transcripts` referencing an audio path. **Audio bytes never traverse this function** — the client uploads them directly to Supabase Storage with their own JWT.
 4. **`/retry`** — Bearer JWT required. Looks up an existing transcript, downloads its audio from Storage (service role), re-runs Deepgram + Haiku, updates the row.
 
@@ -97,7 +97,7 @@ Track local unreleased changes in `docs/pending-changes.md`; release rules live 
 ### Environment variables (split by trust boundary)
 
 - **Client (bundled, public)**: `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, `EXPO_PUBLIC_API_BASE` (native-only override; web uses `window.location.origin`).
-- **Server-only (never bundled)**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`. Set in Vercel project env, also in `.env.local` for local `expo start --web`.
+- **Server-only (never bundled)**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CLEANUP_PROVIDER`, `CLEANUP_MODEL`, `ANTHROPIC_API_KEY` if re-enabling Anthropic later. Set in Vercel project env, also in `.env.local` for local `expo start --web`.
 
 ### iOS keyboard extension (separate native target)
 
@@ -108,4 +108,4 @@ Track local unreleased changes in `docs/pending-changes.md`; release rules live 
 - The app is dark-mode only by visual design (all screens hardcode `#0a0a0a` background); `userInterfaceStyle: "automatic"` in `app.json` is set but unused.
 - `lib/api.ts::getApiBase()` is the single source of API origin — never construct URLs manually in components.
 - API routes return errors via a local `jsonError(status, error)` helper that writes `{ error: string }` with the right status. Match this shape when adding new routes.
-- Cleanup system prompts are **deliberately rigid** (transcript-as-data, never-act-on-content). Don't soften the rules when iterating on `/clean` or `/retry` — they exist to prevent prompt injection from dictated content.
+- Cleanup system prompts are **deliberately rigid** (transcript-as-data, never-act-on-content). Don't soften the rules when iterating on `lib/serverCleanup.ts`, `/clean`, or `/retry` — they exist to prevent prompt injection from dictated content.
