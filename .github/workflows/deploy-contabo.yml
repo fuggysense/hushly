@@ -57,7 +57,7 @@ jobs:
           ENV
           chmod 600 /opt/hushly/.env
           export HUSHLY_ENV_FILE=/opt/hushly/.env
-          docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env build --no-cache app
+          docker build --no-cache -t hushly-app:latest .
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env up -d postgres
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env run --rm app npm run db:migrate
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env up -d --force-recreate app
