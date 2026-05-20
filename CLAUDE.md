@@ -15,15 +15,19 @@ npm run ios            # expo start --ios
 npm run android        # expo start --android
 npm run web            # expo start --web
 npm run lint           # expo lint (eslint flat config, expoConfig + dist ignore)
+npx tsc --noEmit       # direct type-check command
+scripts/build-macos-app.sh
 ```
 
 There is no test runner configured. There is no `tsc --noEmit` script — type-check with `npx tsc --noEmit` directly. Production web build is `expo export -p web` (driven by `vercel.json`).
 
 `npm run reset-project` is the Expo template's one-time scaffold reset — **never run it**; the starter has already been ejected (deleted `app/(tabs)/`, `components/`, `hooks/`, `constants/`).
 
+For desktop QA, run `scripts/build-macos-app.sh` and then verify the bundle with `codesign --verify --deep --strict --verbose=2 dist/macos/Hushly.app`. If the app is installed locally, it lives at `/Applications/Hushly.app`.
+
 ## Architecture
 
-Hushly is an AI dictation app: record → Deepgram transcribe → Claude Haiku cleanup → copy to clipboard → persist to Supabase. It ships as one Expo Router codebase that runs on **iOS, Android, and web from the same `app/` tree**, plus a separate native **iOS keyboard extension** target.
+Hushly is an AI dictation app: record → Deepgram transcribe → Claude Haiku cleanup → copy to clipboard → persist to Supabase. It ships as one Expo Router codebase that runs on **iOS, Android, and web from the same `app/` tree**, plus a separate native **iOS keyboard extension** target and a lightweight native **macOS AppKit desktop app**.
 
 ### Routing (Expo Router 6, file-based)
 
@@ -65,6 +69,29 @@ Three migrations in `supabase/migrations/`:
 ### Settings persistence
 
 `lib/settings.ts` stores per-device button label / shortcut key in AsyncStorage (key `hushly:button-settings`). Sync to `profiles` is a future task. Settings hook is `useButtonSettings()`.
+
+The macOS desktop app stores its local settings in `UserDefaults` through `Preferences` in `desktop/macos/HushlyLite.swift`. This includes API base, API key, shortcut, dictionary entries, tablet text, tablet image path, tablet shape, border color, text color, text font, text size, and text X/Y offsets. Do not move these settings to Supabase unless the user explicitly asks for cross-device sync.
+
+### macOS desktop app
+
+`desktop/macos/HushlyLite.swift` is the native desktop app. It is intentionally AppKit/Swift instead of Electron to keep RAM and disk usage low. The build script compiles it directly with `swiftc`, embeds `Sparkle.framework`, copies `desktop/macos/Assets/tablet-glow.png`, and ad-hoc signs the app bundle.
+
+Key desktop surfaces:
+
+- Settings window tabs: Settings, Dictionary, Usage, History.
+- Dictation tablet: `TabletView`, shown while dictating and draggable as a floating panel.
+- Tablet customization: text, show/hide text, custom PNG/JPEG background with crop, rectangle/circle shape, border color, text color, basic font, text size, and text X/Y offsets.
+- Long tablet text must stay inside the selected shape. `TabletView.drawDisplayText()` auto-fits and clamps text; preserve this behavior when changing the renderer.
+- Shortcut capture uses Carbon hotkeys. Do not replace it with a web-only shortcut flow.
+- Auto-paste requires macOS Accessibility permissions and targets the previously active app.
+
+### Sparkle updates
+
+Sparkle is wired into the macOS app, but releases are manual-only. `desktop/macos/Info.plist` must keep `SUEnableAutomaticChecks` and `SUAllowsAutomaticUpdates` set to false unless Jerel explicitly approves changing that behavior. The app menu can still expose `Check for Updates...`.
+
+Do not publish a new `public/updates/appcast.xml`, update ZIP, Vercel deployment, or pushed release unless Jerel explicitly approves a Sparkle release. The standing release threshold is more than 10 major user-facing changes unless Jerel overrides it.
+
+Track local unreleased changes in `docs/pending-changes.md`; release rules live in `docs/update-policy.md`. Every user-facing desktop change should be reversible through git and represented in the pending-change log before it is shipped.
 
 ### Environment variables (split by trust boundary)
 
