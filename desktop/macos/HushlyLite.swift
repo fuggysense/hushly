@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import AudioToolbox
 import Carbon.HIToolbox
+import Sparkle
 
 private let defaultAPIBase = "https://hushly-six.vercel.app"
 
@@ -17,6 +18,11 @@ struct HushlyLiteApp {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, @unchecked Sendable {
+  private let updaterController = SPUStandardUpdaterController(
+    startingUpdater: true,
+    updaterDelegate: nil,
+    userDriverDelegate: nil
+  )
   private var tabletPanel: NSPanel!
   private var tabletView: TabletView!
   private var statusLabel: NSTextField!
@@ -176,6 +182,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let appMenuItem = NSMenuItem()
     let appMenu = NSMenu()
     appMenu.addItem(menuItem("Open Settings", action: #selector(showSettings), key: ","))
+    let checkForUpdatesItem = NSMenuItem(
+      title: "Check for Updates...",
+      action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+      keyEquivalent: ""
+    )
+    checkForUpdatesItem.target = updaterController
+    appMenu.addItem(checkForUpdatesItem)
     appMenu.addItem(.separator())
     appMenu.addItem(NSMenuItem(title: "Hide Hushly", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
     appMenu.addItem(NSMenuItem(title: "Quit Hushly", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))

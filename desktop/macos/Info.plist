@@ -13,9 +13,13 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.1.1</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
+  <key>SUFeedURL</key>
+  <string>https://hushly-six.vercel.app/updates/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>XWqlU8Da6xfqaWixD8axrfCLU7NQllWugB+a3D/aYBk=</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>NSAppTransportSecurity</key>
