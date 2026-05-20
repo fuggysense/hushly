@@ -20,6 +20,10 @@
   <string>https://hushly-six.vercel.app/updates/appcast.xml</string>
   <key>SUPublicEDKey</key>
   <string>XWqlU8Da6xfqaWixD8axrfCLU7NQllWugB+a3D/aYBk=</string>
+  <key>SUEnableAutomaticChecks</key>
+  <false/>
+  <key>SUAllowsAutomaticUpdates</key>
+  <false/>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>NSAppTransportSecurity</key>

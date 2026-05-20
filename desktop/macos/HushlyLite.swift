@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var tabletImageStatusLabel: NSTextField?
   private var tabletShapeControl: NSSegmentedControl?
   private var tabletBorderColorWell: NSColorWell?
+  private var tabletTextColorWell: NSColorWell?
+  private var tabletTextFontPopup: NSPopUpButton?
+  private var tabletTextSizeSlider: NSSlider?
+  private var tabletTextXSlider: NSSlider?
+  private var tabletTextYSlider: NSSlider?
   private var cropWindow: NSPanel?
   private var cropPreview: TabletCropPreviewView?
   private var cropZoomSlider: NSSlider?
@@ -131,6 +136,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       tabletImageStatusLabel = nil
       tabletShapeControl = nil
       tabletBorderColorWell = nil
+      tabletTextColorWell = nil
+      tabletTextFontPopup = nil
+      tabletTextSizeSlider = nil
+      tabletTextXSlider = nil
+      tabletTextYSlider = nil
       shortcutButton = nil
       apiBaseField = nil
       apiKeyField = nil
@@ -638,7 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func buildSettingsWindow() {
     let width: CGFloat = 620
-    let height: CGFloat = 660
+    let height: CGFloat = 800
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable],
@@ -684,37 +694,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func buildSettingsPane(frame: NSRect) -> NSView {
     let content = NSView(frame: frame)
+
+    func addLabel(_ title: String, y: CGFloat, width: CGFloat = 120, x: CGFloat = 32) {
+      let label = NSTextField(labelWithString: title)
+      label.frame = NSRect(x: x, y: y, width: width, height: 18)
+      content.addSubview(label)
+    }
+
     let textLabel = NSTextField(labelWithString: "Tablet text")
-    textLabel.frame = NSRect(x: 32, y: 456, width: 120, height: 18)
+    textLabel.frame = NSRect(x: 32, y: 636, width: 120, height: 18)
     content.addSubview(textLabel)
 
     let textField = NSTextField(string: Preferences.shared.tabletText)
-    textField.frame = NSRect(x: 168, y: 450, width: 396, height: 30)
+    textField.frame = NSRect(x: 168, y: 630, width: 396, height: 30)
     content.addSubview(textField)
     tabletTextField = textField
 
     let showText = NSButton(checkboxWithTitle: "Show text on tablet", target: self, action: #selector(tabletAppearanceControlChanged))
-    showText.frame = NSRect(x: 168, y: 416, width: 220, height: 24)
+    showText.frame = NSRect(x: 168, y: 596, width: 220, height: 24)
     showText.state = Preferences.shared.showTabletText ? .on : .off
     content.addSubview(showText)
     showTabletTextCheckbox = showText
 
+    addLabel("Text color", y: 556)
+    let textColorWell = NSColorWell(frame: NSRect(x: 168, y: 548, width: 58, height: 32))
+    textColorWell.color = Preferences.shared.tabletTextColor
+    textColorWell.target = self
+    textColorWell.action = #selector(tabletAppearanceControlChanged)
+    content.addSubview(textColorWell)
+    tabletTextColorWell = textColorWell
+
+    addLabel("Font", y: 556, width: 44, x: 288)
+    let fontPopup = NSPopUpButton(frame: NSRect(x: 344, y: 548, width: 220, height: 32), pullsDown: false)
+    for font in TabletTextFont.allCases {
+      fontPopup.addItem(withTitle: font.title)
+      fontPopup.lastItem?.representedObject = font.rawValue
+    }
+    fontPopup.selectItem(withTitle: Preferences.shared.tabletTextFont.title)
+    fontPopup.target = self
+    fontPopup.action = #selector(tabletAppearanceControlChanged)
+    content.addSubview(fontPopup)
+    tabletTextFontPopup = fontPopup
+
+    addLabel("Text size", y: 514)
+    let sizeSlider = NSSlider(value: Preferences.shared.tabletTextSize, minValue: 7, maxValue: 24, target: self, action: #selector(tabletAppearanceControlChanged))
+    sizeSlider.frame = NSRect(x: 168, y: 510, width: 396, height: 24)
+    sizeSlider.isContinuous = true
+    content.addSubview(sizeSlider)
+    tabletTextSizeSlider = sizeSlider
+
+    addLabel("Text X", y: 474)
+    let xSlider = NSSlider(value: Preferences.shared.tabletTextOffsetX, minValue: -28, maxValue: 28, target: self, action: #selector(tabletAppearanceControlChanged))
+    xSlider.frame = NSRect(x: 168, y: 470, width: 150, height: 24)
+    xSlider.isContinuous = true
+    content.addSubview(xSlider)
+    tabletTextXSlider = xSlider
+
+    addLabel("Text Y", y: 474, width: 52, x: 344)
+    let ySlider = NSSlider(value: Preferences.shared.tabletTextOffsetY, minValue: -28, maxValue: 28, target: self, action: #selector(tabletAppearanceControlChanged))
+    ySlider.frame = NSRect(x: 414, y: 470, width: 150, height: 24)
+    ySlider.isContinuous = true
+    content.addSubview(ySlider)
+    tabletTextYSlider = ySlider
+
     let imageLabel = NSTextField(labelWithString: "Tablet image")
-    imageLabel.frame = NSRect(x: 32, y: 380, width: 120, height: 18)
+    imageLabel.frame = NSRect(x: 32, y: 430, width: 120, height: 18)
     content.addSubview(imageLabel)
 
     let chooseImageButton = NSButton(title: "Choose Image...", target: self, action: #selector(chooseTabletImage))
-    chooseImageButton.frame = NSRect(x: 168, y: 374, width: 124, height: 30)
+    chooseImageButton.frame = NSRect(x: 168, y: 424, width: 124, height: 30)
     chooseImageButton.bezelStyle = .rounded
     content.addSubview(chooseImageButton)
 
     let clearImageButton = NSButton(title: "Clear Image", target: self, action: #selector(clearTabletImage))
-    clearImageButton.frame = NSRect(x: 304, y: 374, width: 112, height: 30)
+    clearImageButton.frame = NSRect(x: 304, y: 424, width: 112, height: 30)
     clearImageButton.bezelStyle = .rounded
     content.addSubview(clearImageButton)
 
     let imageStatus = NSTextField(labelWithString: tabletImageStatusText())
-    imageStatus.frame = NSRect(x: 168, y: 348, width: 396, height: 18)
+    imageStatus.frame = NSRect(x: 168, y: 398, width: 396, height: 18)
     imageStatus.font = NSFont.systemFont(ofSize: 11)
     imageStatus.textColor = NSColor.secondaryLabelColor
     imageStatus.lineBreakMode = .byTruncatingMiddle
@@ -722,20 +780,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletImageStatusLabel = imageStatus
 
     let shapeLabel = NSTextField(labelWithString: "Shape")
-    shapeLabel.frame = NSRect(x: 32, y: 310, width: 120, height: 18)
+    shapeLabel.frame = NSRect(x: 32, y: 360, width: 120, height: 18)
     content.addSubview(shapeLabel)
 
     let shapeControl = NSSegmentedControl(labels: ["Rectangle", "Circle"], trackingMode: .selectOne, target: self, action: #selector(tabletAppearanceControlChanged))
-    shapeControl.frame = NSRect(x: 168, y: 304, width: 220, height: 28)
+    shapeControl.frame = NSRect(x: 168, y: 354, width: 220, height: 28)
     shapeControl.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
     content.addSubview(shapeControl)
     tabletShapeControl = shapeControl
 
     let borderLabel = NSTextField(labelWithString: "Border color")
-    borderLabel.frame = NSRect(x: 32, y: 266, width: 120, height: 18)
+    borderLabel.frame = NSRect(x: 32, y: 316, width: 120, height: 18)
     content.addSubview(borderLabel)
 
-    let colorWell = NSColorWell(frame: NSRect(x: 168, y: 258, width: 58, height: 32))
+    let colorWell = NSColorWell(frame: NSRect(x: 168, y: 308, width: 58, height: 32))
     colorWell.color = Preferences.shared.tabletBorderColor
     colorWell.target = self
     colorWell.action = #selector(tabletAppearanceControlChanged)
@@ -743,40 +801,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletBorderColorWell = colorWell
 
     let shortcutLabel = NSTextField(labelWithString: "Shortcut")
-    shortcutLabel.frame = NSRect(x: 32, y: 220, width: 120, height: 18)
+    shortcutLabel.frame = NSRect(x: 32, y: 274, width: 120, height: 18)
     content.addSubview(shortcutLabel)
 
     let shortcutButton = NSButton(title: Preferences.shared.shortcut.title, target: self, action: #selector(beginShortcutCapture))
-    shortcutButton.frame = NSRect(x: 168, y: 214, width: 396, height: 32)
+    shortcutButton.frame = NSRect(x: 168, y: 268, width: 396, height: 32)
     shortcutButton.bezelStyle = .rounded
     content.addSubview(shortcutButton)
     self.shortcutButton = shortcutButton
 
     let apiLabel = NSTextField(labelWithString: "API base")
-    apiLabel.frame = NSRect(x: 32, y: 162, width: 120, height: 18)
+    apiLabel.frame = NSRect(x: 32, y: 216, width: 120, height: 18)
     content.addSubview(apiLabel)
 
     let apiField = NSTextField(string: Preferences.shared.apiBase)
-    apiField.frame = NSRect(x: 168, y: 156, width: 396, height: 30)
+    apiField.frame = NSRect(x: 168, y: 210, width: 396, height: 30)
     content.addSubview(apiField)
     apiBaseField = apiField
 
     let apiKeyLabel = NSTextField(labelWithString: "API key")
-    apiKeyLabel.frame = NSRect(x: 32, y: 120, width: 120, height: 18)
+    apiKeyLabel.frame = NSRect(x: 32, y: 174, width: 120, height: 18)
     content.addSubview(apiKeyLabel)
 
     let keyField = NSSecureTextField(string: Preferences.shared.apiKey)
-    keyField.frame = NSRect(x: 168, y: 114, width: 288, height: 30)
+    keyField.frame = NSRect(x: 168, y: 168, width: 288, height: 30)
     content.addSubview(keyField)
     apiKeyField = keyField
 
     let pasteKeyButton = NSButton(title: "Paste", target: self, action: #selector(pasteAPIKeyFromClipboard))
-    pasteKeyButton.frame = NSRect(x: 468, y: 112, width: 96, height: 32)
+    pasteKeyButton.frame = NSRect(x: 468, y: 166, width: 96, height: 32)
     pasteKeyButton.bezelStyle = .rounded
     content.addSubview(pasteKeyButton)
 
     let accessStatus = NSTextField(labelWithString: accessibilityStatusText())
-    accessStatus.frame = NSRect(x: 32, y: 78, width: 532, height: 18)
+    accessStatus.frame = NSRect(x: 32, y: 126, width: 532, height: 18)
     accessStatus.textColor = NSColor.secondaryLabelColor
     accessStatus.font = NSFont.systemFont(ofSize: 11)
     accessStatus.lineBreakMode = .byTruncatingTail
@@ -785,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     accessibilityStatusLabel = accessStatus
 
     let mainStatus = NSTextField(labelWithString: "Ready: \(Preferences.shared.shortcut.title)")
-    mainStatus.frame = NSRect(x: 32, y: 50, width: 532, height: 18)
+    mainStatus.frame = NSRect(x: 32, y: 96, width: 532, height: 18)
     mainStatus.textColor = NSColor.secondaryLabelColor
     mainStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
     mainStatus.lineBreakMode = .byTruncatingTail
@@ -794,12 +852,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     mainStatusLabel = mainStatus
 
     let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
-    dictateButton.frame = NSRect(x: 360, y: 12, width: 96, height: 32)
+    dictateButton.frame = NSRect(x: 360, y: 52, width: 96, height: 32)
     dictateButton.bezelStyle = .rounded
     content.addSubview(dictateButton)
 
     let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
-    saveButton.frame = NSRect(x: 468, y: 12, width: 96, height: 32)
+    saveButton.frame = NSRect(x: 468, y: 52, width: 96, height: 32)
     saveButton.bezelStyle = .rounded
     content.addSubview(saveButton)
 
@@ -1019,6 +1077,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletImageStatusLabel?.stringValue = tabletImageStatusText()
     tabletShapeControl?.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
     tabletBorderColorWell?.color = Preferences.shared.tabletBorderColor
+    tabletTextColorWell?.color = Preferences.shared.tabletTextColor
+    tabletTextFontPopup?.selectItem(withTitle: Preferences.shared.tabletTextFont.title)
+    tabletTextSizeSlider?.doubleValue = Preferences.shared.tabletTextSize
+    tabletTextXSlider?.doubleValue = Preferences.shared.tabletTextOffsetX
+    tabletTextYSlider?.doubleValue = Preferences.shared.tabletTextOffsetY
     apiBaseField?.stringValue = Preferences.shared.apiBase
     apiKeyField?.stringValue = Preferences.shared.apiKey
     dictionaryStatusLabel?.stringValue = dictionaryStatusText()
@@ -1032,6 +1095,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletView?.showsDisplayText = Preferences.shared.showTabletText
     tabletView?.shape = Preferences.shared.tabletShape
     tabletView?.borderColor = Preferences.shared.tabletBorderColor
+    tabletView?.textColor = Preferences.shared.tabletTextColor
+    tabletView?.textFont = Preferences.shared.tabletTextFont
+    tabletView?.textSize = CGFloat(Preferences.shared.tabletTextSize)
+    tabletView?.textOffset = NSPoint(x: Preferences.shared.tabletTextOffsetX, y: Preferences.shared.tabletTextOffsetY)
     tabletView?.customBackgroundImage = customTabletImage()
     layoutTabletPanel()
   }
@@ -1050,6 +1117,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func selectedTabletShape() -> TabletShape {
     tabletShapeControl?.selectedSegment == 1 ? .circle : .rectangle
+  }
+
+  private func selectedTabletTextFont() -> TabletTextFont {
+    guard
+      let raw = tabletTextFontPopup?.selectedItem?.representedObject as? String,
+      let font = TabletTextFont(rawValue: raw)
+    else {
+      return Preferences.shared.tabletTextFont
+    }
+    return font
   }
 
   private func layoutTabletPanel() {
@@ -1584,6 +1661,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     if let color = tabletBorderColorWell?.color {
       Preferences.shared.tabletBorderColor = color
     }
+    if let color = tabletTextColorWell?.color {
+      Preferences.shared.tabletTextColor = color
+    }
+    Preferences.shared.tabletTextFont = selectedTabletTextFont()
+    Preferences.shared.tabletTextSize = tabletTextSizeSlider?.doubleValue ?? Preferences.shared.tabletTextSize
+    Preferences.shared.tabletTextOffsetX = tabletTextXSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetX
+    Preferences.shared.tabletTextOffsetY = tabletTextYSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetY
     applyTabletAppearance()
     refreshSettingsFields()
     setStatus("Tablet appearance updated")
@@ -1747,6 +1831,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     if let color = tabletBorderColorWell?.color {
       Preferences.shared.tabletBorderColor = color
     }
+    if let color = tabletTextColorWell?.color {
+      Preferences.shared.tabletTextColor = color
+    }
+    Preferences.shared.tabletTextFont = selectedTabletTextFont()
+    Preferences.shared.tabletTextSize = tabletTextSizeSlider?.doubleValue ?? Preferences.shared.tabletTextSize
+    Preferences.shared.tabletTextOffsetX = tabletTextXSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetX
+    Preferences.shared.tabletTextOffsetY = tabletTextYSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetY
 
     if let apiBase = apiBaseField?.stringValue {
       Preferences.shared.apiBase = apiBase
@@ -2005,6 +2096,50 @@ enum TabletShape: String {
   }
 }
 
+enum TabletTextFont: String, CaseIterable {
+  case systemHeavy
+  case systemMedium
+  case roundedHeavy
+  case monospacedBold
+  case serifBold
+
+  var title: String {
+    switch self {
+    case .systemHeavy:
+      return "System Heavy"
+    case .systemMedium:
+      return "System Medium"
+    case .roundedHeavy:
+      return "Rounded Heavy"
+    case .monospacedBold:
+      return "Monospaced Bold"
+    case .serifBold:
+      return "Serif Bold"
+    }
+  }
+
+  func font(ofSize size: CGFloat) -> NSFont {
+    switch self {
+    case .systemHeavy:
+      return NSFont.systemFont(ofSize: size, weight: .heavy)
+    case .systemMedium:
+      return NSFont.systemFont(ofSize: size, weight: .medium)
+    case .roundedHeavy:
+      let base = NSFont.systemFont(ofSize: size, weight: .heavy)
+      if let descriptor = base.fontDescriptor.withDesign(.rounded),
+        let rounded = NSFont(descriptor: descriptor, size: size)
+      {
+        return rounded
+      }
+      return base
+    case .monospacedBold:
+      return NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
+    case .serifBold:
+      return NSFont(name: "Georgia-Bold", size: size) ?? NSFont.systemFont(ofSize: size, weight: .bold)
+    }
+  }
+}
+
 final class TabletView: NSView {
   var displayText = "$10k/month" {
     didSet { needsDisplay = true }
@@ -2015,6 +2150,22 @@ final class TabletView: NSView {
   }
 
   var borderColor = NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1) {
+    didSet { needsDisplay = true }
+  }
+
+  var textColor = NSColor.white {
+    didSet { needsDisplay = true }
+  }
+
+  var textFont = TabletTextFont.systemHeavy {
+    didSet { needsDisplay = true }
+  }
+
+  var textSize: CGFloat = 16 {
+    didSet { needsDisplay = true }
+  }
+
+  var textOffset = NSPoint(x: 0, y: 0) {
     didSet { needsDisplay = true }
   }
 
@@ -2083,6 +2234,9 @@ final class TabletView: NSView {
   }
 
   private func drawDisplayText() {
+    let cleanText = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanText.isEmpty else { return }
+
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
     paragraph.lineBreakMode = .byTruncatingTail
@@ -2092,17 +2246,54 @@ final class TabletView: NSView {
     shadow.shadowBlurRadius = isRecording ? 8 : 4
     shadow.shadowOffset = .zero
 
-    let font = NSFont.systemFont(ofSize: min(16, bounds.height * 0.42), weight: .heavy)
+    let horizontalInset: CGFloat = shape == .circle ? 9 : 18
+    let maxRect = bounds.insetBy(dx: horizontalInset, dy: shape == .circle ? 15 : 5)
+    let availableHeight: CGFloat = shape == .circle ? min(24, maxRect.height) : min(20, maxRect.height)
+    let requestedSize = min(max(textSize, 7), shape == .circle ? 24 : 22)
+    let font = fittedFont(for: cleanText, requestedSize: requestedSize, maxSize: NSSize(width: maxRect.width, height: availableHeight))
     let attrs: [NSAttributedString.Key: Any] = [
       .font: font,
-      .foregroundColor: NSColor.white,
+      .foregroundColor: textColor,
       .paragraphStyle: paragraph,
       .shadow: shadow,
     ]
 
-    let horizontalInset: CGFloat = shape == .circle ? 10 : 24
-    let textRect = NSRect(x: horizontalInset, y: bounds.midY - 10, width: bounds.width - (horizontalInset * 2), height: 22)
-    displayText.draw(in: textRect, withAttributes: attrs)
+    let measured = (cleanText as NSString).size(withAttributes: attrs)
+    let baselineCenterY = bounds.midY + (shape == .circle ? 8 : 5)
+    let unclamped = NSRect(
+      x: maxRect.midX - (maxRect.width / 2) + textOffset.x,
+      y: baselineCenterY - (availableHeight / 2) + textOffset.y,
+      width: maxRect.width,
+      height: max(availableHeight, measured.height + 2)
+    )
+    let textRect = clamp(unclamped, inside: maxRect)
+    (cleanText as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
+  }
+
+  private func fittedFont(for text: String, requestedSize: CGFloat, maxSize: NSSize) -> NSFont {
+    let minSize: CGFloat = 7
+    var size = requestedSize
+    while size > minSize {
+      let font = textFont.font(ofSize: size)
+      let measured = (text as NSString).size(withAttributes: [.font: font])
+      if measured.width <= maxSize.width && measured.height <= maxSize.height {
+        return font
+      }
+      size -= 0.5
+    }
+    return textFont.font(ofSize: minSize)
+  }
+
+  private func clamp(_ rect: NSRect, inside bounds: NSRect) -> NSRect {
+    let width = min(rect.width, bounds.width)
+    let height = min(rect.height, bounds.height)
+    let minX = bounds.minX
+    let maxX = bounds.maxX - width
+    let minY = bounds.minY
+    let maxY = bounds.maxY - height
+    let x = min(max(rect.origin.x, minX), maxX)
+    let y = min(max(rect.origin.y, minY), maxY)
+    return NSRect(x: x, y: y, width: width, height: height)
   }
 
   private func drawWaveform() {
@@ -2280,6 +2471,11 @@ final class Preferences {
   private let tabletImagePathKey = "tabletImagePath"
   private let tabletShapeKey = "tabletShape"
   private let tabletBorderColorKey = "tabletBorderColor"
+  private let tabletTextColorKey = "tabletTextColor"
+  private let tabletTextFontKey = "tabletTextFont"
+  private let tabletTextSizeKey = "tabletTextSize"
+  private let tabletTextOffsetXKey = "tabletTextOffsetX"
+  private let tabletTextOffsetYKey = "tabletTextOffsetY"
   private let shortcutIDKey = "shortcutID"
   private let shortcutKeyCodeKey = "shortcutKeyCode"
   private let shortcutModifiersKey = "shortcutModifiers"
@@ -2331,6 +2527,52 @@ final class Preferences {
     }
     set {
       defaults.set(hexFromColor(newValue), forKey: tabletBorderColorKey)
+    }
+  }
+
+  var tabletTextColor: NSColor {
+    get {
+      colorFromHex(defaults.string(forKey: tabletTextColorKey) ?? "#FFFFFF", fallback: NSColor.white)
+    }
+    set {
+      defaults.set(hexFromColor(newValue), forKey: tabletTextColorKey)
+    }
+  }
+
+  var tabletTextFont: TabletTextFont {
+    get {
+      TabletTextFont(rawValue: defaults.string(forKey: tabletTextFontKey) ?? "") ?? .systemHeavy
+    }
+    set {
+      defaults.set(newValue.rawValue, forKey: tabletTextFontKey)
+    }
+  }
+
+  var tabletTextSize: Double {
+    get {
+      let value = defaults.object(forKey: tabletTextSizeKey) == nil ? 16 : defaults.double(forKey: tabletTextSizeKey)
+      return min(max(value, 7), 24)
+    }
+    set {
+      defaults.set(min(max(newValue, 7), 24), forKey: tabletTextSizeKey)
+    }
+  }
+
+  var tabletTextOffsetX: Double {
+    get {
+      min(max(defaults.double(forKey: tabletTextOffsetXKey), -28), 28)
+    }
+    set {
+      defaults.set(min(max(newValue, -28), 28), forKey: tabletTextOffsetXKey)
+    }
+  }
+
+  var tabletTextOffsetY: Double {
+    get {
+      min(max(defaults.double(forKey: tabletTextOffsetYKey), -28), 28)
+    }
+    set {
+      defaults.set(min(max(newValue, -28), 28), forKey: tabletTextOffsetYKey)
     }
   }
 
@@ -2530,10 +2772,10 @@ private func keyLabel(_ keyCode: UInt32, fallbackLabel: String? = nil) -> String
   return "Key \(keyCode)"
 }
 
-private func colorFromHex(_ value: String) -> NSColor {
+private func colorFromHex(_ value: String, fallback: NSColor = NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1)) -> NSColor {
   let cleaned = value.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespacesAndNewlines))
   guard cleaned.count == 6, let intValue = Int(cleaned, radix: 16) else {
-    return NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 1)
+    return fallback
   }
 
   let red = CGFloat((intValue >> 16) & 0xFF) / 255
