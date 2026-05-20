@@ -81,6 +81,7 @@ Key desktop surfaces:
 - Settings window tabs: Settings, Dictionary, Usage, History.
 - Dictation tablet: `TabletView`, shown while dictating and draggable as a floating panel.
 - Tablet customization: text, show/hide text, custom PNG/JPEG background with crop, rectangle/circle shape, border color, text color, basic font, text size, and text X/Y offsets.
+- Settings includes a recording-on tablet preview that uses the same `TabletView` renderer as the floating dictation tablet.
 - Long tablet text must stay inside the selected shape. `TabletView.drawDisplayText()` auto-fits and clamps text; preserve this behavior when changing the renderer.
 - Shortcut capture uses Carbon hotkeys. Do not replace it with a web-only shortcut flow.
 - Auto-paste requires macOS Accessibility permissions and targets the previously active app.

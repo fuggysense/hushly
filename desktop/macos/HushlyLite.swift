@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var tabletTextSizeSlider: NSSlider?
   private var tabletTextXSlider: NSSlider?
   private var tabletTextYSlider: NSSlider?
+  private var tabletPreviewHost: NSView?
+  private var tabletPreviewView: TabletView?
   private var cropWindow: NSPanel?
   private var cropPreview: TabletCropPreviewView?
   private var cropZoomSlider: NSSlider?
@@ -141,6 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       tabletTextSizeSlider = nil
       tabletTextXSlider = nil
       tabletTextYSlider = nil
+      tabletPreviewHost = nil
+      tabletPreviewView = nil
       shortcutButton = nil
       apiBaseField = nil
       apiKeyField = nil
@@ -772,12 +776,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(clearImageButton)
 
     let imageStatus = NSTextField(labelWithString: tabletImageStatusText())
-    imageStatus.frame = NSRect(x: 168, y: 398, width: 396, height: 18)
+    imageStatus.frame = NSRect(x: 168, y: 398, width: 220, height: 18)
     imageStatus.font = NSFont.systemFont(ofSize: 11)
     imageStatus.textColor = NSColor.secondaryLabelColor
     imageStatus.lineBreakMode = .byTruncatingMiddle
     content.addSubview(imageStatus)
     tabletImageStatusLabel = imageStatus
+
+    let previewLabel = NSTextField(labelWithString: "Recording preview")
+    previewLabel.frame = NSRect(x: 400, y: 386, width: 164, height: 18)
+    previewLabel.textColor = NSColor.secondaryLabelColor
+    previewLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+    content.addSubview(previewLabel)
+
+    let previewHost = NSView(frame: .zero)
+    previewHost.wantsLayer = true
+    previewHost.layer?.backgroundColor = NSColor(calibratedWhite: 0.02, alpha: 0.94).cgColor
+    previewHost.layer?.masksToBounds = true
+    content.addSubview(previewHost)
+    tabletPreviewHost = previewHost
+
+    let previewView = TabletView(frame: .zero)
+    previewView.isRecording = true
+    previewView.audioLevel = 0.72
+    previewHost.addSubview(previewView)
+    tabletPreviewView = previewView
 
     let shapeLabel = NSTextField(labelWithString: "Shape")
     shapeLabel.frame = NSRect(x: 32, y: 360, width: 120, height: 18)
@@ -1091,16 +1114,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func applyTabletAppearance() {
-    tabletView?.displayText = Preferences.shared.tabletText
-    tabletView?.showsDisplayText = Preferences.shared.showTabletText
-    tabletView?.shape = Preferences.shared.tabletShape
-    tabletView?.borderColor = Preferences.shared.tabletBorderColor
-    tabletView?.textColor = Preferences.shared.tabletTextColor
-    tabletView?.textFont = Preferences.shared.tabletTextFont
-    tabletView?.textSize = CGFloat(Preferences.shared.tabletTextSize)
-    tabletView?.textOffset = NSPoint(x: Preferences.shared.tabletTextOffsetX, y: Preferences.shared.tabletTextOffsetY)
-    tabletView?.customBackgroundImage = customTabletImage()
+    configureTabletView(tabletView, recording: isRecording, audioLevel: smoothedAudioLevel)
+    configureTabletView(tabletPreviewView, recording: true, audioLevel: 0.72)
     layoutTabletPanel()
+    layoutTabletPreview()
+  }
+
+  private func configureTabletView(_ view: TabletView?, recording: Bool, audioLevel: CGFloat) {
+    view?.displayText = Preferences.shared.tabletText
+    view?.showsDisplayText = Preferences.shared.showTabletText
+    view?.shape = Preferences.shared.tabletShape
+    view?.borderColor = Preferences.shared.tabletBorderColor
+    view?.textColor = Preferences.shared.tabletTextColor
+    view?.textFont = Preferences.shared.tabletTextFont
+    view?.textSize = CGFloat(Preferences.shared.tabletTextSize)
+    view?.textOffset = NSPoint(x: Preferences.shared.tabletTextOffsetX, y: Preferences.shared.tabletTextOffsetY)
+    view?.customBackgroundImage = customTabletImage()
+    view?.isRecording = recording
+    view?.audioLevel = audioLevel
   }
 
   private func customTabletImage() -> NSImage? {
@@ -1142,6 +1173,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     statusLabel?.frame = NSRect(x: 12, y: 3, width: size.width - 24, height: 10)
     tabletPanel.setContentSize(size)
     tabletPanel.setFrameOrigin(origin)
+  }
+
+  private func layoutTabletPreview() {
+    guard let host = tabletPreviewHost, let preview = tabletPreviewView else { return }
+
+    let shape = Preferences.shared.tabletShape
+    let slot = NSRect(x: 396, y: 306, width: 180, height: 78)
+    let size = shape.previewPanelSize
+    host.frame = NSRect(
+      x: slot.midX - (size.width / 2),
+      y: slot.midY - (size.height / 2),
+      width: size.width,
+      height: size.height
+    )
+    host.layer?.cornerRadius = shape == .circle ? size.width / 2 : 12
+    preview.frame = shape.previewTabletFrame
+    preview.needsDisplay = true
   }
 
   private func refreshHistoryUI() {
@@ -2092,6 +2140,24 @@ enum TabletShape: String {
       return NSSize(width: 1200, height: 186)
     case .circle:
       return NSSize(width: 512, height: 512)
+    }
+  }
+
+  var previewPanelSize: NSSize {
+    switch self {
+    case .rectangle:
+      return NSSize(width: 180, height: 42)
+    case .circle:
+      return NSSize(width: 78, height: 78)
+    }
+  }
+
+  var previewTabletFrame: NSRect {
+    switch self {
+    case .rectangle:
+      return NSRect(x: 7, y: 8, width: 166, height: 26)
+    case .circle:
+      return NSRect(x: 8, y: 8, width: 62, height: 62)
     }
   }
 }
