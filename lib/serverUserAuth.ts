@@ -101,8 +101,7 @@ async function insertOrUpdateUserPassword(email: string, password: string, upser
   const conflict = upsert
     ? `on conflict (email) do update
        set password_hash = excluded.password_hash,
-           password_salt = excluded.password_salt,
-           updated_at = now()`
+           password_salt = excluded.password_salt`
     : '';
 
   const { rows } = await getDb().query<AuthUser>(
