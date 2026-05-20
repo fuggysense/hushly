@@ -19,9 +19,6 @@ services:
 
   app:
     image: hushly-app:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: hushly-app
     restart: unless-stopped
     depends_on:
