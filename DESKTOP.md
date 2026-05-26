@@ -31,11 +31,17 @@ Permissions:
 - Accessibility permission is required for automatic paste into other apps. Without it, Hushly still copies the final text to the clipboard.
 - For auto-paste, focus the target text box first and start dictation with the global shortcut. The in-app Dictate button is mainly a settings/test control.
 
-Storage:
-- The native Mac app stores transcripts locally at `~/Library/Application Support/Hushly/transcripts.json`.
-- Saved audio for retry is stored locally under `~/Library/Application Support/Hushly/Audio/`.
-- Custom tablet images are cropped and stored locally at `~/Library/Application Support/Hushly/tablet-background.png`.
-- Hushly web history is stored in the VPS Postgres database after sign-in; the native Mac app does not sync to the VPS database yet.
+Storage (privacy-first, local-only on Mac):
+- The native Mac app keeps **all** transcripts and audio on the user's own machine. Nothing is uploaded to the VPS for storage.
+  - Transcripts: `~/Library/Application Support/Hushly/transcripts.json`
+  - Audio for retry: `~/Library/Application Support/Hushly/Audio/pending-<uuid>.m4a`
+  - Cropped tablet background: `~/Library/Application Support/Hushly/tablet-background.png`
+- The VPS sees audio bytes **only in flight** during the Deepgram proxy call (`/transcribe`) and during cleanup (`/clean`). Neither route persists audio or transcripts to Postgres for the desktop app.
+- The mobile and web clients (Expo Router) **do** upload audio to `/audio` and transcripts to `/persist` so History works across devices. That is intentional for those surfaces. The Mac app does not use those endpoints.
+- What this means for a friend installing the desktop app:
+  - Their recordings never leave their Mac except as the in-flight Deepgram request.
+  - Disk usage scales with how much audio they keep for retry. Hushly does not currently rotate audio — they can prune `~/Library/Application Support/Hushly/Audio/` manually if it grows.
+  - The only shared resource they consume on your VPS is Deepgram/OpenAI quota via the configured API base.
 
 Sharing:
 - Share the app bundle or a zipped copy of `dist/macos/Hushly.app`.

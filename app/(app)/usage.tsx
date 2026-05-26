@@ -48,7 +48,10 @@ export default function Usage() {
           <>
             <TranscriptCard style={styles.card}>
               <Text style={styles.eyebrow}>Today</Text>
-              <Text style={styles.big}>{usage.today.requests} requests</Text>
+              <Text style={styles.big}>{usage.today.wordCount.toLocaleString()} words</Text>
+              <Text style={styles.line}>
+                {formatDuration(usage.today.audioDurationSeconds)} talked · {timeSaved(usage.today.wordCount)} saved vs typing
+              </Text>
               <Text style={styles.line}>
                 {usage.today.transcriptions} transcriptions · {usage.today.cleanups} cleanups · {usage.today.errors} errors
               </Text>
@@ -57,7 +60,10 @@ export default function Usage() {
 
             <TranscriptCard style={styles.card}>
               <Text style={styles.eyebrow}>Last 30 days</Text>
-              <Text style={styles.big}>{usage.last30d.requests} requests</Text>
+              <Text style={styles.big}>{usage.last30d.wordCount.toLocaleString()} words</Text>
+              <Text style={styles.line}>
+                {formatDuration(usage.last30d.audioDurationSeconds)} talked · {timeSaved(usage.last30d.wordCount)} saved vs typing
+              </Text>
               <Text style={styles.line}>
                 {usage.last30d.transcriptions} transcriptions · {usage.last30d.cleanups} cleanups · {usage.last30d.errors} errors
               </Text>
@@ -79,6 +85,25 @@ function byteString(bytes: number) {
   const kb = bytes / 1024;
   if (kb < 1024) return `${kb.toFixed(1)} KB`;
   return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function formatDuration(seconds: number) {
+  if (!seconds || seconds < 1) return '0s';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${minutes.toFixed(1)} min`;
+  const hours = minutes / 60;
+  return `${hours.toFixed(1)} hr`;
+}
+
+// Average human typing speed ≈ 40 WPM. We use 100 WPM as the user's
+// declared comparison baseline (fast typist). Adjust here if that changes.
+const TYPING_WPM = 100;
+
+function timeSaved(wordCount: number) {
+  if (!wordCount) return '0s';
+  const typingSeconds = (wordCount / TYPING_WPM) * 60;
+  return formatDuration(typingSeconds);
 }
 
 const styles = StyleSheet.create({

@@ -2,7 +2,8 @@ import { readTranscriptAudio } from '@/lib/serverAudio';
 import { authenticateRequest, jsonError } from '@/lib/serverAuth';
 import { cleanupErrorMessage, cleanupErrorStatus, cleanupTranscript } from '@/lib/serverCleanup';
 
-const DG_URL = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true';
+const DG_URL =
+  'https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&dictation=true';
 
 type TranscriptRow = {
   id: string;

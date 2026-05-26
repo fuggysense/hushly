@@ -54,22 +54,20 @@ export async function clean(
   return cleaned || text;
 }
 
+type UsageBucket = {
+  requests: number;
+  transcriptions: number;
+  cleanups: number;
+  errors: number;
+  audioBytes: number;
+  wordCount: number;
+  audioDurationSeconds: number;
+};
+
 export async function getUsageSummary(): Promise<{
   identity: { kind: string; label?: string; tag?: string; email?: string };
-  today: {
-    requests: number;
-    transcriptions: number;
-    cleanups: number;
-    errors: number;
-    audioBytes: number;
-  };
-  last30d: {
-    requests: number;
-    transcriptions: number;
-    cleanups: number;
-    errors: number;
-    audioBytes: number;
-  };
+  today: UsageBucket;
+  last30d: UsageBucket;
 } | null> {
   const authHeader = await sessionAuthHeader();
   if (!authHeader.Authorization) return null;
@@ -187,13 +185,17 @@ export async function retryTranscript(
   return res.json();
 }
 
-export async function finalizeAndCopy(rawText: string, durationMs: number): Promise<{
+export async function finalizeAndCopy(
+  rawText: string,
+  _durationMs: number,
+  options: { polish?: boolean } = {}
+): Promise<{
   cleaned: string;
   cleanMs: number;
   totalMs: number;
 }> {
   const t0 = Date.now();
-  const cleaned = await clean(rawText);
+  const cleaned = options.polish ? await clean(rawText) : rawText;
   const cleanMs = Date.now() - t0;
   await Clipboard.setStringAsync(cleaned);
   return { cleaned, cleanMs, totalMs: Date.now() - t0 };

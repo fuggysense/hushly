@@ -1350,14 +1350,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     }
     lines.append("")
     lines.append("Today")
-    lines.append("  Requests: \(intValue(today["requests"]))")
+    lines.append("  Words transcribed: \(intValue(today["wordCount"]))")
+    lines.append("  Talk time: \(formatTalkTime(today["audioDurationSeconds"]))")
+    lines.append("  Time saved vs typing: \(timeSavedString(today["wordCount"]))")
     lines.append("  Transcriptions: \(intValue(today["transcriptions"]))")
     lines.append("  Cleanups: \(intValue(today["cleanups"]))")
     lines.append("  Errors: \(intValue(today["errors"]))")
     lines.append("  Audio uploaded: \(byteString(intValue(today["audioBytes"])))")
     lines.append("")
     lines.append("Last 30 days")
-    lines.append("  Requests: \(intValue(month["requests"]))")
+    lines.append("  Words transcribed: \(intValue(month["wordCount"]))")
+    lines.append("  Talk time: \(formatTalkTime(month["audioDurationSeconds"]))")
+    lines.append("  Time saved vs typing: \(timeSavedString(month["wordCount"]))")
     lines.append("  Transcriptions: \(intValue(month["transcriptions"]))")
     lines.append("  Cleanups: \(intValue(month["cleanups"]))")
     lines.append("  Errors: \(intValue(month["errors"]))")
@@ -3082,4 +3086,33 @@ private func byteString(_ bytes: Int) -> String {
   let kb = Double(bytes) / 1024
   if kb < 1024 { return String(format: "%.1f KB", kb) }
   return String(format: "%.1f MB", kb / 1024)
+}
+
+private func doubleValue(_ value: Any?) -> Double {
+  if let double = value as? Double { return double }
+  if let int = value as? Int { return Double(int) }
+  if let number = value as? NSNumber { return number.doubleValue }
+  if let string = value as? String, let parsed = Double(string) { return parsed }
+  return 0
+}
+
+private func formatSeconds(_ seconds: Double) -> String {
+  if seconds < 1 { return "0s" }
+  if seconds < 60 { return "\(Int(seconds.rounded()))s" }
+  let minutes = seconds / 60
+  if minutes < 60 { return String(format: "%.1f min", minutes) }
+  return String(format: "%.1f hr", minutes / 60)
+}
+
+private func formatTalkTime(_ value: Any?) -> String {
+  formatSeconds(doubleValue(value))
+}
+
+// 100 WPM is the user's declared typing baseline for time-saved comparison.
+private let typingWordsPerMinute: Double = 100
+
+private func timeSavedString(_ wordCount: Any?) -> String {
+  let words = Double(intValue(wordCount))
+  if words <= 0 { return "0s" }
+  return formatSeconds(words / typingWordsPerMinute * 60)
 }

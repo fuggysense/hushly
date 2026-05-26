@@ -9,12 +9,17 @@ export type ButtonSettings = {
   label: string;
   recordingLabel: string;
   shortcutKey: string;
+  // When true, raw Deepgram transcript is passed through OpenAI /clean for
+  // verbal-tic removal + sentence polish. Off by default — Deepgram's
+  // smart_format + dictation + filler-word strip handles the common cases.
+  polishWithGPT: boolean;
 };
 
 const DEFAULTS: ButtonSettings = {
   label: 'Tap to record',
   recordingLabel: 'Tap to stop',
   shortcutKey: ' ', // Spacebar on web
+  polishWithGPT: false,
 };
 
 const KEY = 'hushly:button-settings';

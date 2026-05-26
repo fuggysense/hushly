@@ -34,6 +34,9 @@ export type UsageEvent = {
   inputChars?: number;
   outputChars?: number;
   error?: string;
+  // Set by /transcribe so the Usage tab can show words spoken + talk time.
+  wordCount?: number;
+  audioDurationSeconds?: number;
 };
 
 export function jsonError(status: number, error: string) {
@@ -95,8 +98,9 @@ export async function recordUsage(db: Db, identity: RequestIdentity | null, even
     await db.query(
       `insert into api_usage_events
        (api_key_id, api_key_label, api_key_tag, api_key_prefix, user_id, route, status,
-        duration_ms, audio_bytes, input_chars, output_chars, error)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        duration_ms, audio_bytes, input_chars, output_chars, error,
+        word_count, audio_duration_seconds)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [
         identity?.kind === 'api_key' ? identity.apiKeyId : null,
         identity?.kind === 'api_key' ? identity.label : null,
@@ -110,6 +114,8 @@ export async function recordUsage(db: Db, identity: RequestIdentity | null, even
         event.inputChars ?? null,
         event.outputChars ?? null,
         event.error ? event.error.slice(0, 500) : null,
+        event.wordCount ?? null,
+        event.audioDurationSeconds ?? null,
       ]
     );
   } catch {

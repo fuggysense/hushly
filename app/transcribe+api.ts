@@ -9,7 +9,14 @@ import {
   type RequestIdentity,
 } from '@/lib/serverAuth';
 
-const DG_URL = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true';
+// Deepgram Nova-3 multilingual + built-in cleanup features:
+//  - smart_format: punctuation, capitalization, dates, numbers, URLs
+//  - punctuate:    explicit punctuation (already implied by smart_format)
+//  - dictation:    spoken commands ("comma","period") → "," "."
+//  - language=multi: auto language detect (Nova-3 Multilingual)
+// filler_words is intentionally omitted — default false strips "uh"/"um".
+const DG_URL =
+  'https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&dictation=true';
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -77,6 +84,8 @@ export async function POST(request: Request) {
   const dgJson = (await dg.json()) as DeepgramResponse;
   const transcript =
     dgJson?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? '';
+  const audioDurationSeconds = dgJson?.metadata?.duration ?? null;
+  const wordCount = transcript ? transcript.split(/\s+/).filter(Boolean).length : 0;
 
   await recordUsage(auth.db, identity, {
     route: '/transcribe',
@@ -84,12 +93,15 @@ export async function POST(request: Request) {
     durationMs: Date.now() - startedAt,
     audioBytes,
     outputChars: transcript.length,
+    wordCount,
+    audioDurationSeconds: audioDurationSeconds ?? undefined,
   });
 
   return Response.json({ transcript });
 }
 
 type DeepgramResponse = {
+  metadata?: { duration?: number };
   results?: {
     channels?: {
       alternatives?: { transcript?: string }[];

@@ -9,6 +9,8 @@ type UsageRow = {
   output_chars: number | null;
   error: string | null;
   created_at: string;
+  word_count: number | null;
+  audio_duration_seconds: number | string | null;
 };
 
 export async function GET(request: Request) {
@@ -22,7 +24,8 @@ export async function GET(request: Request) {
     auth.identity.kind === 'api_key' ? auth.identity.apiKeyId : auth.identity.userId;
 
   const { rows } = await auth.db.query<UsageRow>(
-    `select route, status, duration_ms, audio_bytes, input_chars, output_chars, error, created_at
+    `select route, status, duration_ms, audio_bytes, input_chars, output_chars, error,
+            created_at, word_count, audio_duration_seconds
      from api_usage_events
      where created_at >= $1 and ${identityFilter}
      order by created_at desc
@@ -81,6 +84,13 @@ function summarize(rows: UsageRow[]) {
       acc.durationMs += row.duration_ms ?? 0;
       acc.inputChars += row.input_chars ?? 0;
       acc.outputChars += row.output_chars ?? 0;
+      acc.wordCount += row.word_count ?? 0;
+      // pg returns NUMERIC as a string to preserve precision; coerce.
+      const audioSeconds =
+        typeof row.audio_duration_seconds === 'string'
+          ? Number(row.audio_duration_seconds)
+          : row.audio_duration_seconds ?? 0;
+      acc.audioDurationSeconds += Number.isFinite(audioSeconds) ? audioSeconds : 0;
       return acc;
     },
     {
@@ -92,6 +102,8 @@ function summarize(rows: UsageRow[]) {
       durationMs: 0,
       inputChars: 0,
       outputChars: 0,
+      wordCount: 0,
+      audioDurationSeconds: 0,
     }
   );
 }

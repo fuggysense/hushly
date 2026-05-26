@@ -211,7 +211,7 @@ export default function Home() {
       }
 
       const [cleanResult, upload] = await Promise.all([
-        finalizeAndCopy(rawText, durationMs),
+        finalizeAndCopy(rawText, durationMs, { polish: settings.polishWithGPT }),
         uploadAudio(audioBlob, mimeType),
       ]);
       setCleaned(cleanResult.cleaned);
@@ -235,7 +235,7 @@ export default function Home() {
       setErrMsg(e instanceof Error ? e.message : String(e));
       haptic('warn');
     }
-  }, [recorder, elapsedMs]);
+  }, [recorder, elapsedMs, settings.polishWithGPT]);
 
   const cancel = useCallback(async () => {
     haptic('tap');
@@ -279,11 +279,12 @@ export default function Home() {
   const shortcutLabel =
     settings.shortcutKey === ' ' ? 'Space' : settings.shortcutKey.toUpperCase();
 
+  const finalizingLabel = settings.polishWithGPT ? 'Cleaning…' : 'Transcribing…';
   const status: { label: string; tone: StatusTone } =
     phase === 'recording'
       ? { label: `Recording ${formatMs(elapsedMs)}`, tone: 'live' }
       : phase === 'finalizing'
-        ? { label: 'Cleaning…', tone: 'work' }
+        ? { label: finalizingLabel, tone: 'work' }
         : phase === 'done'
           ? { label: 'Copied', tone: 'ok' }
           : phase === 'error'
@@ -386,7 +387,9 @@ export default function Home() {
                 Tap ✓ to transcribe · × to discard{isWeb ? ' · Esc cancels' : ''}
               </Text>
             ) : phase === 'finalizing' ? (
-              <Text style={styles.pillHint}>Transcribing + cleaning…</Text>
+              <Text style={styles.pillHint}>
+                {settings.polishWithGPT ? 'Transcribing + cleaning…' : 'Transcribing…'}
+              </Text>
             ) : isWeb ? (
               <View style={styles.inlineHint}>
                 <Text style={styles.idleHint}>Press</Text>
@@ -445,17 +448,36 @@ export default function Home() {
               </Pressable>
             </>
           ) : (
-            <Pressable
-              onPress={() => {
-                setLabelDraft(settings.label);
-                setEditingLabel(true);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Edit button label"
-              hitSlop={8}
-            >
-              <Text style={styles.editLink}>Customize button</Text>
-            </Pressable>
+            <>
+              <Pressable
+                onPress={() => {
+                  setLabelDraft(settings.label);
+                  setEditingLabel(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Edit button label"
+                hitSlop={8}
+              >
+                <Text style={styles.editLink}>Customize button</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
+                  saveSettings({ ...settings, polishWithGPT: !settings.polishWithGPT })
+                }
+                accessibilityRole="switch"
+                accessibilityState={{ checked: settings.polishWithGPT }}
+                accessibilityLabel={
+                  settings.polishWithGPT
+                    ? 'Disable GPT polish — transcript will use raw Deepgram output'
+                    : 'Enable GPT polish — transcript will be cleaned by AI'
+                }
+                hitSlop={8}
+              >
+                <Text style={styles.editLink}>
+                  Polish: {settings.polishWithGPT ? 'On' : 'Off'}
+                </Text>
+              </Pressable>
+            </>
           )}
         </View>
       </View>
