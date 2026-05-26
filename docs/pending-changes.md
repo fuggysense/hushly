@@ -77,3 +77,12 @@ This file tracks local changes that have not been shipped through Sparkle.
 - Change: clarify that the Mac app already keeps all transcripts and audio on the user's machine and never persists them to the VPS. No code change.
 - Reversible by: reverting the matching `DESKTOP.md` change.
 - Sparkle approval: not requested.
+
+### Desktop GPT Polish Toggle (off by default)
+
+- Status: local only, not shipped to Sparkle.
+- Major-change count: 1.
+- Scope: macOS settings + dictation flow + retry flow.
+- Change: add a "Polish transcript with GPT (slower, cleaner)" checkbox to the Settings tab, defaulted off. When off, the Mac app skips the `/clean` step entirely and pastes the raw Deepgram transcript (now polished by `smart_format` + `dictation` + filler-word strip). Matches the off-by-default polish toggle that already exists on mobile/web.
+- Reversible by: reverting the matching `desktop/macos/HushlyLite.swift` changes.
+- Sparkle approval: not requested.

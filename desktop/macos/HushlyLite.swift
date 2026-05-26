@@ -467,13 +467,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         return
       }
 
-      setStatus("Cleaning")
       let finalText: String
-      do {
-        finalText = try await clean(transcript: transcript)
-      } catch {
+      if Preferences.shared.polishWithGPT {
+        setStatus("Cleaning")
+        do {
+          finalText = try await clean(transcript: transcript)
+        } catch {
+          finalText = transcript
+          setStatus("Cleanup unavailable; pasting raw.")
+        }
+      } else {
         finalText = transcript
-        setStatus("Cleanup unavailable; pasting raw.")
       }
 
       let savedURL = try? TranscriptStore.shared.storeAudio(fileURL)
@@ -874,6 +878,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(mainStatus)
     mainStatusLabel = mainStatus
 
+    let polishCheckbox = NSButton(
+      checkboxWithTitle: "Polish transcript with GPT (slower, cleaner)",
+      target: self,
+      action: #selector(togglePolishWithGPT(_:))
+    )
+    polishCheckbox.frame = NSRect(x: 32, y: 58, width: 320, height: 20)
+    polishCheckbox.state = Preferences.shared.polishWithGPT ? .on : .off
+    polishCheckbox.toolTip =
+      "Off: paste Deepgram output directly (faster). On: pipe through OpenAI /clean to strip verbal tics."
+    content.addSubview(polishCheckbox)
+
     let dictateButton = NSButton(title: "Dictate", target: self, action: #selector(toggleDictation))
     dictateButton.frame = NSRect(x: 360, y: 52, width: 96, height: 32)
     dictateButton.bezelStyle = .rounded
@@ -885,6 +900,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(saveButton)
 
     return content
+  }
+
+  @objc private func togglePolishWithGPT(_ sender: NSButton) {
+    Preferences.shared.polishWithGPT = (sender.state == .on)
   }
 
   private func buildDictionaryPane(frame: NSRect) -> NSView {
@@ -1413,9 +1432,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       }
 
       let finalText: String
-      do {
-        finalText = try await clean(transcript: transcript)
-      } catch {
+      if Preferences.shared.polishWithGPT {
+        do {
+          finalText = try await clean(transcript: transcript)
+        } catch {
+          finalText = transcript
+        }
+      } else {
         finalText = transcript
       }
 
@@ -2553,6 +2576,7 @@ final class Preferences {
   private let apiBaseKey = "apiBase"
   private let apiKeyKey = "apiKey"
   private let dictionaryTextKey = "dictionaryText"
+  private let polishWithGPTKey = "polishWithGPT"
 
   var tabletText: String {
     get {
@@ -2679,6 +2703,19 @@ final class Preferences {
     }
     set {
       defaults.set(normalizedAPIBase(newValue), forKey: apiBaseKey)
+    }
+  }
+
+  // When true, the Mac app pipes the raw Deepgram transcript through
+  // /clean (OpenAI) before pasting. Off by default — Deepgram's
+  // smart_format + dictation + filler-word strip covers the common cases
+  // and skipping /clean shaves ~500-1500ms off paste latency.
+  var polishWithGPT: Bool {
+    get {
+      defaults.bool(forKey: polishWithGPTKey)
+    }
+    set {
+      defaults.set(newValue, forKey: polishWithGPTKey)
     }
   }
 
