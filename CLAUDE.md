@@ -107,3 +107,54 @@ Track local unreleased changes in `docs/pending-changes.md`; release rules live 
 - `lib/apiBase.ts::getApiBase()` is the single source of API origin — never construct URLs manually in components.
 - API routes return errors via a local `jsonError(status, error)` helper that writes `{ error: string }` with the right status. Match this shape when adding new routes.
 - Cleanup system prompts are **deliberately rigid** (transcript-as-data, never-act-on-content). Don't soften the rules when iterating on `lib/serverCleanup.ts`, `/clean`, or `/retry` — they exist to prevent prompt injection from dictated content.
+
+## Onboarding a new user (signup → first dictation)
+
+The app is multi-tenant at the row level (every table FK's to `app_users.id`), but single-tenant at the infrastructure level — one shared Postgres, one shared `/opt/hushly/data/audio` directory on the Contabo VPS. There is no per-user database or per-user storage seam.
+
+**Standard flow (web/native):**
+1. User opens the app → unauthenticated → `app/(auth)/sign-up.tsx` shown by the Gate in `app/_layout.tsx`.
+2. Client POSTs `/auth` → `lib/serverAuth.ts` hashes the password, inserts into `app_users`, creates a session row in `auth_sessions`, returns a bearer token.
+3. Token is stored locally (AsyncStorage on native, localStorage on web). All subsequent `/transcribe`, `/clean`, `/audio`, `/persist` calls send `Authorization: Bearer <token>`.
+4. First recording on the record screen runs the standard pipeline. The user appears in `api_usage_events` from the first `/transcribe` call.
+
+**Owner accounts** (`HUSHLY_OWNER_EMAILS`) get `can_manage_api_keys=true` automatically and can mint admin API keys via `/admin-api-keys` for the iOS keyboard, the macOS app, or external tools.
+
+**Letting a friend use Hushly today:** the recommended path is to give them an account on the shared VPS (they sign up, their rows isolate via `user_id`). Audio + transcripts go in the shared dir / DB but are queryable only by them. **Self-hosting** is the only way to keep their audio off Jerel's VPS — fork the deployment: spin up their own Contabo box (or any VPS), point it at their own `DATABASE_URL`, their own `HUSHLY_AUDIO_DIR`, their own Deepgram + OpenAI keys, and have them set `EXPO_PUBLIC_API_BASE` to their hostname. There is **no per-API-key backend routing**; do not build it for one friend.
+
+## Pushing changes to GitHub (and auto-deploy)
+
+Remote: `github.com/fuggysense/hushly` → `main` branch.
+
+**Push to `main` = production deploy.** The `.github/workflows/deploy-contabo.yml` action runs on every push to `main`:
+1. `verify` job — `npm ci`, `npx tsc --noEmit`, `npm run lint`, `npx expo export -p web`. If any fails, deploy is blocked.
+2. `deploy` job — SSHes to Contabo, rsyncs the repo to `/opt/hushly/app/`, writes `/opt/hushly/.env` from the `HUSHLY_VPS_ENV` GitHub secret, runs `docker build --no-cache`, applies pending Postgres migrations, restarts the `app` container, then brings up `caddy` + `backup`.
+
+Required GitHub secrets (already configured): `CONTABO_HOST`, `CONTABO_USER`, `CONTABO_SSH_KEY`, `HUSHLY_VPS_ENV` (full `.env` contents — update this secret in Settings → Secrets when adding new server-only vars like `CLEANUP_MODEL_<NAME>`).
+
+**Before pushing — local gate:**
+
+```bash
+npx tsc --noEmit
+npm run lint
+npm run db:migrate          # only if you added a migration; runs against local Postgres
+git status
+git add -p                  # review hunks one by one
+git commit -m "<imperative message>"
+git push origin main
+```
+
+After push, watch the deploy:
+
+```bash
+gh run watch                                       # follow the GitHub Action
+ssh root@194.238.27.4 'docker compose -f /opt/hushly/app/docker-compose.vps.yml logs -f app'
+```
+
+**Never push** if `tsc --noEmit` has errors — the verify job will fail and the VPS will keep running the previous image, but the failed run wastes a build slot and clouds the deploy history.
+
+**Desktop releases are separate.** Pushing to `main` does not ship a new macOS build. Sparkle releases follow `docs/update-policy.md` (manual only, >10 user-facing changes threshold, Jerel-approved). The `docs/pending-changes.md` log is the changelog of record for desktop.
+
+## Cleanup / future-changelog policy
+
+When a discussion produces ideas that aren't being built today, **do not start them**. Capture them as a dated entry in `docs/pending-changes.md` under a `### Future / Deferred` heading so they survive context loss. Pickup state from open conversations also belongs there — the file is the resume point after a `/clear`, `/compact`, or session timeout.
