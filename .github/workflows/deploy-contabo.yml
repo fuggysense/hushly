@@ -59,7 +59,10 @@ jobs:
           export HUSHLY_ENV_FILE=/opt/hushly/.env
           docker build --no-cache -t hushly-app:latest .
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env up -d postgres
-          docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env run --rm app npm run db:migrate
+          # -T + </dev/null: this whole script is piped to ssh via a heredoc,
+          # so an interactive `compose run` would swallow the remaining script
+          # lines as its stdin and the container would never be recreated.
+          docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env run --rm -T app npm run db:migrate </dev/null
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env up -d --no-build --force-recreate app
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env up -d caddy backup
           docker compose -f docker-compose.vps.yml --env-file /opt/hushly/.env ps
