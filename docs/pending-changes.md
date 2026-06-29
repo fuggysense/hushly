@@ -18,6 +18,15 @@ This file tracks local changes that have not been shipped through Sparkle.
 - Reversible by: reverting the git commit that contains this entry and the matching `app/transcribe+api.ts` and `desktop/macos/HushlyLite.swift` changes.
 - Sparkle approval: not requested.
 
+### Deploy Pipeline Fix — container was never recreated (server/CI, not desktop)
+
+- Status: shipped to `main` / Contabo. Not a Sparkle/desktop change; logged here because this is the repo's changelog of record.
+- Scope: `.github/workflows/deploy-contabo.yml`.
+- Symptom found while debugging "Keywords/Dictionary save doesn't help": the VPS had been running ~5-week-old code. Every push built a fresh `hushly-app:latest` image but kept running the old container, so server-side changes (including the Deepgram params above) never went live.
+- Root cause: the deploy script is piped to `ssh` via a heredoc, and `docker compose run --rm app npm run db:migrate` reads stdin — so the migrate step consumed the remaining heredoc lines (`force-recreate`, caddy, `ps`) as its own input. They silently never ran and the step still exited 0 (green CI).
+- Fix: added `-T` and `</dev/null` to the migrate command so the heredoc reaches the recreate step. Verified on the next deploy: `hushly-app` container was actually recreated (fresh uptime) and production now applies `replace`/`keyterm`.
+- One-time manual remediation also applied: `docker compose ... up -d --no-build --force-recreate app` on the box to put the already-built image into service immediately.
+
 ## 2026-05-20
 
 ### Tablet Text Styling Controls
