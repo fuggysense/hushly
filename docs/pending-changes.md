@@ -2,6 +2,22 @@
 
 This file tracks local changes that have not been shipped through Sparkle.
 
+## 2026-06-29
+
+### Deepgram Accuracy Controls (Dictionary → Find/Replace + Keywords)
+
+- Status: local only, not shipped to Sparkle. Server side IS deployed to Contabo (the `/transcribe` route change deploys on push to `main`).
+- Major-change count: 2 (Dictionary now wired to Deepgram replace; new Keywords tab).
+- Scope: `app/transcribe+api.ts` (server) and `desktop/macos/HushlyLite.swift` (macOS app).
+- Change:
+  - `/transcribe` now forwards whitelisted `replace` and `keyterm` query params to Deepgram (base params stay fixed and un-overridable; `keyterm` capped at 100, `replace` at 200). Backward compatible — no params = previous behavior.
+  - macOS Dictionary entries now apply at the Deepgram layer via `replace=find:replace` (find lowercased per Deepgram's rule) instead of via the OpenAI `/clean` step, so they work even when GPT polish is off. Dictionary was removed from the `/clean` body to avoid double-application.
+  - New "Keywords" tab (Deepgram keyterm prompting) with a multiline editor + `Preferences.keywordsText` storage; sent as `keyterm` params on transcribe.
+  - `dictation=true` (spoken punctuation) was already enabled — confirmed, no change.
+- Validated against the live Deepgram Nova-3 API: `replace` + `keyterm` + `dictation` + `language=multi` all return 200 and behave correctly; `+`-bearing terms (e.g. "C++") round-trip intact.
+- Reversible by: reverting the git commit that contains this entry and the matching `app/transcribe+api.ts` and `desktop/macos/HushlyLite.swift` changes.
+- Sparkle approval: not requested.
+
 ## 2026-05-20
 
 ### Tablet Text Styling Controls

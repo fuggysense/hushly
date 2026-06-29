@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var dictionaryStatusLabel: NSTextField?
   private var addDictionaryButton: NSButton?
   private var removeDictionaryButton: NSButton?
+  private var keywordsPane: NSView?
+  private var keywordsTextView: NSTextView?
+  private var keywordsStatusLabel: NSTextField?
   private var usagePane: NSView?
   private var usageSummaryText: NSTextView?
   private var usageStatusLabel: NSTextField?
@@ -157,6 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       dictionaryStatusLabel = nil
       addDictionaryButton = nil
       removeDictionaryButton = nil
+      keywordsPane = nil
+      keywordsTextView = nil
+      keywordsStatusLabel = nil
       usagePane = nil
       usageSummaryText = nil
       usageStatusLabel = nil
@@ -507,7 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func transcribe(fileURL: URL) async throws -> String {
-    var request = URLRequest(url: apiURL(path: "/transcribe"))
+    var request = URLRequest(url: transcribeURL())
     request.httpMethod = "POST"
     request.setValue("audio/m4a", forHTTPHeaderField: "Content-Type")
     addAPIKeyHeader(to: &request)
@@ -518,19 +524,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     return json["transcript"] as? String ?? ""
   }
 
+  // Builds /transcribe with Deepgram accuracy params:
+  //  - replace=find:replace  from the Dictionary tab (Deepgram requires the
+  //    Find side lowercase; the Replace side keeps its casing).
+  //  - keyterm=term          from the Keywords tab (boosts recognition).
+  // Both are applied at the Deepgram layer, so they work even when the GPT
+  // polish step is off.
+  private func transcribeURL() -> URL {
+    let base = apiURL(path: "/transcribe")
+    guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+      return base
+    }
+    var items: [URLQueryItem] = []
+
+    for entry in Preferences.shared.dictionaryEntries {
+      let find = entry.trigger.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      let replacement = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !find.isEmpty, !replacement.isEmpty else { continue }
+      items.append(URLQueryItem(name: "replace", value: "\(find):\(replacement)"))
+    }
+
+    for term in Preferences.shared.keywords.prefix(100) {
+      items.append(URLQueryItem(name: "keyterm", value: term))
+    }
+
+    guard !items.isEmpty else { return base }
+    components.queryItems = (components.queryItems ?? []) + items
+    // URLComponents leaves a literal "+" in query values, but the server
+    // reparses with WHATWG URLSearchParams, which decodes "+" as a space —
+    // so encode it explicitly to keep terms like "C++" intact.
+    components.percentEncodedQuery = components.percentEncodedQuery?
+      .replacingOccurrences(of: "+", with: "%2B")
+    return components.url ?? base
+  }
+
   private func clean(transcript: String) async throws -> String {
     var request = URLRequest(url: apiURL(path: "/clean"))
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     addAPIKeyHeader(to: &request)
 
-    var body: [String: Any] = ["text": transcript]
-    let dictionary = Preferences.shared.dictionaryEntries.map {
-      ["trigger": $0.trigger, "replacement": $0.replacement]
-    }
-    if !dictionary.isEmpty {
-      body["dictionary"] = dictionary
-    }
+    // Dictionary find/replace now runs at the Deepgram layer (see
+    // transcribeURL), so /clean only does GPT polish here.
+    let body: [String: Any] = ["text": transcript]
 
     let payload = try JSONSerialization.data(withJSONObject: body)
     let (responseData, response) = try await URLSession.shared.upload(for: request, from: payload)
@@ -670,8 +706,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
     let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
 
-    let tabs = NSSegmentedControl(labels: ["Settings", "Dictionary", "Usage", "History"], trackingMode: .selectOne, target: self, action: #selector(switchMainPane))
-    tabs.frame = NSRect(x: 24, y: height - 48, width: 410, height: 28)
+    let tabs = NSSegmentedControl(labels: ["Settings", "Dictionary", "Keywords", "Usage", "History"], trackingMode: .selectOne, target: self, action: #selector(switchMainPane))
+    tabs.frame = NSRect(x: 24, y: height - 48, width: 470, height: 28)
     tabs.selectedSegment = 0
     content.addSubview(tabs)
     tabControl = tabs
@@ -679,18 +715,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let paneFrame = NSRect(x: 0, y: 0, width: width, height: height - 64)
     let settingsPane = buildSettingsPane(frame: paneFrame)
     let dictionaryPane = buildDictionaryPane(frame: paneFrame)
+    let keywordsPane = buildKeywordsPane(frame: paneFrame)
     let usagePane = buildUsagePane(frame: paneFrame)
     let historyPane = buildHistoryPane(frame: paneFrame)
     dictionaryPane.isHidden = true
+    keywordsPane.isHidden = true
     usagePane.isHidden = true
     historyPane.isHidden = true
 
     content.addSubview(settingsPane)
     content.addSubview(dictionaryPane)
+    content.addSubview(keywordsPane)
     content.addSubview(usagePane)
     content.addSubview(historyPane)
     self.settingsPane = settingsPane
     self.dictionaryPane = dictionaryPane
+    self.keywordsPane = keywordsPane
     self.usagePane = usagePane
     self.historyPane = historyPane
 
@@ -986,6 +1026,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     return content
   }
 
+  private func buildKeywordsPane(frame: NSRect) -> NSView {
+    let content = NSView(frame: frame)
+
+    let title = NSTextField(labelWithString: "Keywords")
+    title.frame = NSRect(x: 32, y: frame.height - 92, width: 200, height: 22)
+    title.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    content.addSubview(title)
+
+    let blurb = NSTextField(wrappingLabelWithString:
+      "Boost recognition of names, product terms, or jargon — e.g. gmail, Jerel, Hushly. "
+      + "Deepgram pays extra attention to these so they get transcribed correctly. "
+      + "Up to 100, separated by commas or new lines.")
+    blurb.frame = NSRect(x: 32, y: frame.height - 156, width: 532, height: 52)
+    blurb.textColor = NSColor.secondaryLabelColor
+    blurb.font = NSFont.systemFont(ofSize: 12)
+    content.addSubview(blurb)
+
+    let scroll = NSScrollView(frame: NSRect(x: 32, y: 86, width: 532, height: frame.height - 270))
+    scroll.borderType = .bezelBorder
+    scroll.hasVerticalScroller = true
+    let textView = NSTextView(frame: scroll.bounds)
+    textView.minSize = NSSize(width: 0, height: 0)
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+    textView.autoresizingMask = [.width]
+    textView.textContainerInset = NSSize(width: 6, height: 8)
+    textView.font = NSFont.systemFont(ofSize: 13)
+    textView.isRichText = false
+    textView.isAutomaticQuoteSubstitutionEnabled = false
+    textView.string = Preferences.shared.keywordsText
+    scroll.documentView = textView
+    content.addSubview(scroll)
+    keywordsTextView = textView
+
+    let example = NSTextField(labelWithString: "Example: gmail, Jerel, Hushly, Deepgram")
+    example.frame = NSRect(x: 32, y: 58, width: 380, height: 18)
+    example.textColor = NSColor.secondaryLabelColor
+    example.font = NSFont.systemFont(ofSize: 11)
+    content.addSubview(example)
+
+    let status = NSTextField(labelWithString: keywordsStatusText())
+    status.frame = NSRect(x: 32, y: 28, width: 250, height: 18)
+    status.textColor = NSColor.secondaryLabelColor
+    status.font = NSFont.systemFont(ofSize: 11)
+    status.lineBreakMode = .byTruncatingTail
+    content.addSubview(status)
+    keywordsStatusLabel = status
+
+    let saveButton = NSButton(title: "Save Keywords", target: self, action: #selector(saveKeywords))
+    saveButton.frame = NSRect(x: 420, y: 20, width: 144, height: 32)
+    saveButton.bezelStyle = .rounded
+    content.addSubview(saveButton)
+
+    return content
+  }
+
+  private func keywordsStatusText() -> String {
+    let count = Preferences.shared.keywords.count
+    return count == 1 ? "1 keyword saved" : "\(count) keywords saved"
+  }
+
+  @objc private func saveKeywords() {
+    Preferences.shared.keywordsText = keywordsTextView?.string ?? ""
+    keywordsStatusLabel?.stringValue = keywordsStatusText()
+    setStatus("Keywords saved")
+  }
+
   private func buildUsagePane(frame: NSRect) -> NSView {
     let content = NSView(frame: frame)
 
@@ -1104,11 +1212,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let selected = tabControl?.selectedSegment ?? 0
     settingsPane?.isHidden = selected != 0
     dictionaryPane?.isHidden = selected != 1
-    usagePane?.isHidden = selected != 2
-    historyPane?.isHidden = selected != 3
-    if selected == 2 {
+    keywordsPane?.isHidden = selected != 2
+    usagePane?.isHidden = selected != 3
+    historyPane?.isHidden = selected != 4
+    if selected == 3 {
       refreshUsage()
-    } else if selected == 3 {
+    } else if selected == 4 {
       refreshHistoryUI()
     }
   }
@@ -2576,6 +2685,7 @@ final class Preferences {
   private let apiBaseKey = "apiBase"
   private let apiKeyKey = "apiKey"
   private let dictionaryTextKey = "dictionaryText"
+  private let keywordsTextKey = "keywordsText"
   private let polishWithGPTKey = "polishWithGPT"
 
   var tabletText: String {
@@ -2744,6 +2854,30 @@ final class Preferences {
     set {
       dictionaryText = serializeDictionaryEntries(newValue)
     }
+  }
+
+  // Raw multiline/comma text the user types in the Keywords tab.
+  var keywordsText: String {
+    get {
+      defaults.string(forKey: keywordsTextKey) ?? ""
+    }
+    set {
+      defaults.set(newValue, forKey: keywordsTextKey)
+    }
+  }
+
+  // Parsed, de-duplicated keyterms forwarded to Deepgram as keyterm params.
+  // Split on commas and newlines; trimmed; empties dropped.
+  var keywords: [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for raw in keywordsText.components(separatedBy: CharacterSet(charactersIn: ",\n")) {
+      let term = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !term.isEmpty, !seen.contains(term.lowercased()) else { continue }
+      seen.insert(term.lowercased())
+      result.append(term)
+    }
+    return result
   }
 }
 

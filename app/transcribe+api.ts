@@ -15,8 +15,34 @@ import {
 //  - dictation:    spoken commands ("comma","period") → "," "."
 //  - language=multi: auto language detect (Nova-3 Multilingual)
 // filler_words is intentionally omitted — default false strips "uh"/"um".
-const DG_URL =
-  'https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&dictation=true';
+//
+// Per-request client params (forwarded, never trusted blindly — only these
+// two keys pass through):
+//  - replace=FIND:REPLACE  word-level find/replace (FIND must be lowercase).
+//                          Backs the desktop Dictionary tab.
+//  - keyterm=TERM          boosts recognition of names/jargon (Nova-3 keyterm
+//                          prompting). Backs the desktop Keywords tab.
+const DG_BASE_PARAMS: Record<string, string> = {
+  model: 'nova-3',
+  language: 'multi',
+  smart_format: 'true',
+  punctuate: 'true',
+  dictation: 'true',
+};
+const KEYTERM_MAX = 100; // Deepgram caps keyterms at 100 per request.
+const REPLACE_MAX = 200;
+
+function buildDeepgramUrl(incoming: URLSearchParams): string {
+  const url = new URL('https://api.deepgram.com/v1/listen');
+  for (const [k, v] of Object.entries(DG_BASE_PARAMS)) url.searchParams.set(k, v);
+  for (const v of incoming.getAll('replace').slice(0, REPLACE_MAX)) {
+    if (v.trim()) url.searchParams.append('replace', v);
+  }
+  for (const v of incoming.getAll('keyterm').slice(0, KEYTERM_MAX)) {
+    if (v.trim()) url.searchParams.append('keyterm', v);
+  }
+  return url.toString();
+}
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -58,7 +84,8 @@ export async function POST(request: Request) {
     return jsonError(status, errorMessage);
   }
 
-  const dg = await fetch(DG_URL, {
+  const dgUrl = buildDeepgramUrl(new URL(request.url).searchParams);
+  const dg = await fetch(dgUrl, {
     method: 'POST',
     headers: {
       Authorization: `Token ${key}`,
