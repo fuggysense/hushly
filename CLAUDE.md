@@ -50,6 +50,7 @@ The main routes form one pipeline:
 4. **`/audio`** — Bearer session required. Stores retry audio on the VPS filesystem under `HUSHLY_AUDIO_DIR`.
 5. **`/persist`** — Bearer session required. Inserts the transcript row in Postgres referencing an audio path.
 6. **`/retry`** — Bearer session required. Looks up an existing transcript, reads its stored audio, re-runs Deepgram + OpenAI cleanup, updates the row.
+7. **`/realtime`** — WebSocket (VPS only, handled in `server/http.js`, not an Expo route). Auth via `X-Hushly-API-Key` or bearer header, validated against **`/auth-check`**. Client streams 16 kHz linear16 PCM; server proxies to Deepgram live and relays `{ type: 'interim' | 'final', text }` events. Backs the desktop app's realtime mode. Not served on the Vercel rollback path.
 
 ### Client → API flow (record screen)
 
@@ -68,17 +69,18 @@ Plain Postgres migrations live in `db/migrations/` and are applied by `npm run d
 
 `lib/settings.ts` stores per-device button label / shortcut key in AsyncStorage (key `hushly:button-settings`). Sync to `profiles` is a future task. Settings hook is `useButtonSettings()`.
 
-The macOS desktop app stores its local settings in `UserDefaults` through `Preferences` in `desktop/macos/HushlyLite.swift`. This includes API base, API key, shortcut, dictionary entries, tablet text, tablet image path, tablet shape, border color, text color, text font, text size, and text X/Y offsets. Do not move these settings to Postgres unless the user explicitly asks for cross-device sync.
+The macOS desktop app stores its local settings in `UserDefaults` through `Preferences` in `desktop/macos/HushlyLite.swift`. This includes API base, API key, shortcut, dictionary entries, transcription mode (batch vs realtime), tablet text, tablet image path (plus original image path, crop zoom/offsets, and image opacity), tablet shape, border color, text color, text font, text size, and text X/Y offsets. Do not move these settings to Postgres unless the user explicitly asks for cross-device sync.
 
 ### macOS desktop app
 
-`desktop/macos/HushlyLite.swift` is the native desktop app. It is intentionally AppKit/Swift instead of Electron to keep RAM and disk usage low. The build script compiles it directly with `swiftc`, embeds `Sparkle.framework`, copies `desktop/macos/Assets/tablet-glow.png`, and ad-hoc signs the app bundle.
+`desktop/macos/HushlyLite.swift` (plus `desktop/macos/RealtimeSession.swift` for live streaming) is the native desktop app. It is intentionally AppKit/Swift instead of Electron to keep RAM and disk usage low. The build script compiles both files directly with `swiftc`, embeds `Sparkle.framework`, and ad-hoc signs the app bundle.
 
 Key desktop surfaces:
 
 - Settings window tabs: Settings, Dictionary, Usage, History.
 - Dictation tablet: `TabletView`, shown while dictating and draggable as a floating panel.
-- Tablet customization: text, show/hide text, custom PNG/JPEG background with crop, rectangle/circle shape, border color, text color, basic font, text size, and text X/Y offsets.
+- Tablet customization: text, show/hide text, custom PNG/JPEG background with crop (non-destructive — original + crop params are stored so "Adjust Image..." can reposition), image opacity inside the glass, rectangle/circle shape, border color, text color, basic font, text size, and text X/Y offsets.
+- The tablet is a liquid-glass sheet: `NSVisualEffectView` behind-window blur masked to the shape, with the user's image composited translucently above it. A pill on the sheet toggles between live transcription and transcribe-on-stop; live mode expands the rectangle sheet to fit streaming text.
 - Settings includes a recording-on tablet preview that uses the same `TabletView` renderer as the floating dictation tablet.
 - Long tablet text must stay inside the selected shape. `TabletView.drawDisplayText()` auto-fits and clamps text; preserve this behavior when changing the renderer.
 - Shortcut capture uses Carbon hotkeys. Do not replace it with a web-only shortcut flow.

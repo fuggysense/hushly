@@ -2,6 +2,22 @@
 
 This file tracks local changes that have not been shipped through Sparkle.
 
+## 2026-07-05
+
+### Liquid Glass Tablet + Realtime Transcription
+
+- Status: local only, not shipped to Sparkle. Server side (`/realtime` WS proxy + `/auth-check`) deploys on push to `main`.
+- Major-change count: 4 (glass tablet redesign; realtime streaming mode; image opacity + non-destructive Adjust Image; on-tablet mode pill).
+- Scope: `desktop/macos/HushlyLite.swift`, `desktop/macos/RealtimeSession.swift` (new), `scripts/build-macos-app.sh`, `server/http.js`, `app/auth-check+api.ts` (new), `package.json` (+`ws`).
+- Change:
+  - Tablet redesigned as a liquid-glass sheet: real `NSVisualEffectView` behind-window blur (masked to shape), glass tint + top sheen, rim light (user border color glows with audio level while recording), grab handle, springy pop-in and fade-out. The baked `tablet-glow.png` asset is no longer bundled.
+  - New realtime transcription mode: `RealtimeSession` streams 16 kHz linear16 PCM from an `AVAudioEngine` tap to the VPS `/realtime` WebSocket proxy (Deepgram live, nova-3 multi, interim results). Words render live on the tablet (wrapped, newest-words-first suffix fitting); the rectangle sheet expands to 384×148 while streaming. Finals + trailing interim are assembled on stop, then optional GPT polish → paste → history (WAV retry audio; `/transcribe` retry now sends `audio/wav` for `.wav` files and `TranscriptStore.storeAudio` preserves extensions).
+  - Mode is switchable from a pill on the tablet (LIVE / ON STOP) and a segmented control in Settings (`Preferences.transcriptionMode`, default batch — behavior unchanged unless opted in).
+  - Custom tablet image now composites translucently inside the glass with an Image opacity slider (`Preferences.tabletImageOpacity`, default 0.55). The uncropped original + crop params are stored so "Adjust Image..." repositions without re-importing. Dictionary `replace` + `keyterm` params also apply to live sessions.
+  - Server: `server/http.js` gains a `/realtime` WebSocket upgrade handler (auth via internal call to new `/auth-check` route; unauthorized closes 4401). Verified locally: server boots, WS upgrade + auth rejection path tested. Live Deepgram path requires the deployed VPS env. Realtime sessions do not yet record `api_usage_events` (known gap).
+- Reversible by: reverting the git commit that contains this entry and the matching file changes.
+- Sparkle approval: not requested.
+
 ## 2026-06-29
 
 ### Deepgram Accuracy Controls (Dictionary → Find/Replace + Keywords)

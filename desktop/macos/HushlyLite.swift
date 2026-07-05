@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var cropYSlider: NSSlider?
   private var cropImage: NSImage?
   private var cropShape = TabletShape.rectangle
+  // Newly picked image file, held until the crop is confirmed so Cancel
+  // doesn't clobber the stored original.
+  private var pendingOriginalImageURL: URL?
+  private var isStartingRecording = false
   private var shortcutButton: NSButton?
   private var shortcutCaptureWindow: NSPanel?
   private var shortcutCaptureMonitor: Any?
@@ -84,6 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var escapeGlobalMonitor: Any?
   private var recorder: AVAudioRecorder?
   private var recordingURL: URL?
+  private var realtimeSession: RealtimeSession?
+  private var transcriptionModeControl: NSSegmentedControl?
+  private var tabletBlurView: NSVisualEffectView?
+  private var modePillButton: NSButton?
+  private var tabletImageOpacitySlider: NSSlider?
   private var pasteTargetApp: NSRunningApplication?
   private var lastExternalApp: NSRunningApplication?
   private var animationTimer: Timer?
@@ -146,9 +155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       tabletTextSizeSlider = nil
       tabletTextXSlider = nil
       tabletTextYSlider = nil
+      tabletImageOpacitySlider = nil
       tabletPreviewHost = nil
       tabletPreviewView = nil
       shortcutButton = nil
+      transcriptionModeControl = nil
       apiBaseField = nil
       apiKeyField = nil
       mainStatusLabel = nil
@@ -283,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletPanel.isMovableByWindowBackground = true
     tabletPanel.isReleasedWhenClosed = false
     tabletPanel.hidesOnDeactivate = false
-    tabletPanel.backgroundColor = NSColor(calibratedWhite: 0.02, alpha: 0.94)
+    tabletPanel.backgroundColor = .clear
     tabletPanel.isOpaque = false
     tabletPanel.hasShadow = true
     tabletPanel.level = .floating
@@ -295,24 +306,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
     let content = NSView(frame: contentRect)
     content.wantsLayer = true
-    content.layer?.backgroundColor = NSColor(calibratedWhite: 0.02, alpha: 0.94).cgColor
-    content.layer?.cornerRadius = 13
-    content.layer?.masksToBounds = true
 
-    tabletView = TabletView(frame: NSRect(x: 8, y: 14, width: 200, height: 31))
+    // Liquid glass base: real behind-window blur clipped to the tablet shape
+    // (via maskImage — layer cornerRadius breaks NSVisualEffectView blur).
+    let blur = NSVisualEffectView(frame: contentRect)
+    blur.material = .hudWindow
+    blur.blendingMode = .behindWindow
+    blur.state = .active
+    blur.appearance = NSAppearance(named: .darkAqua)
+    content.addSubview(blur)
+    tabletBlurView = blur
+
+    tabletView = TabletView(frame: .zero)
     applyTabletAppearance()
     content.addSubview(tabletView)
 
     statusLabel = NSTextField(labelWithString: "Ready")
-    statusLabel.frame = NSRect(x: 12, y: 3, width: 192, height: 10)
     statusLabel.textColor = NSColor.white.withAlphaComponent(0.72)
     statusLabel.font = NSFont.systemFont(ofSize: 8, weight: .medium)
     statusLabel.lineBreakMode = .byTruncatingTail
     statusLabel.maximumNumberOfLines = 1
     content.addSubview(statusLabel)
 
+    let pill = NSButton(title: "", target: self, action: #selector(toggleTranscriptionModeFromTablet))
+    pill.isBordered = false
+    pill.wantsLayer = true
+    pill.layer?.cornerRadius = 7
+    pill.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+    pill.toolTip = "Switch between live transcription and transcribe-on-stop"
+    content.addSubview(pill)
+    modePillButton = pill
+
     tabletPanel.contentView = content
     applyTabletAppearance()
+    refreshModePill()
+  }
+
+  // Mode pill (bottom-right of the glass sheet): tap to flip between live
+  // streaming and transcribe-on-stop without opening Settings. Applies to the
+  // next dictation if one is already running.
+  @objc private func toggleTranscriptionModeFromTablet() {
+    let next: TranscriptionMode = Preferences.shared.transcriptionMode == .realtime ? .batch : .realtime
+    Preferences.shared.transcriptionMode = next
+    refreshModePill()
+    transcriptionModeControl?.selectedSegment = next == .realtime ? 1 : 0
+    if !isRecording {
+      setReadyStatus()
+    }
+  }
+
+  private func refreshModePill() {
+    let live = Preferences.shared.transcriptionMode == .realtime
+    let title = NSAttributedString(
+      string: live ? "LIVE" : "ON STOP",
+      attributes: [
+        .font: NSFont.systemFont(ofSize: 8, weight: .bold),
+        .foregroundColor: NSColor.white.withAlphaComponent(live ? 0.95 : 0.6),
+      ]
+    )
+    modePillButton?.attributedTitle = title
+    modePillButton?.layer?.backgroundColor = live
+      ? NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: 0.22).cgColor
+      : NSColor.white.withAlphaComponent(0.12).cgColor
   }
 
   @objc private func showTabletFromMenu() {
@@ -320,10 +375,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func showTabletPanel(positionAtBottom: Bool) {
-    if positionAtBottom || !tabletPanel.isVisible {
+    let wasVisible = tabletPanel.isVisible
+    if positionAtBottom || !wasVisible {
       placeTabletAtBottom()
     }
     tabletPanel.orderFrontRegardless()
+    if !wasVisible {
+      popInTablet()
+    }
+  }
+
+  // iOS-sheet style entrance: springy scale-up plus a quick fade.
+  private func popInTablet() {
+    guard let content = tabletPanel.contentView else { return }
+    content.wantsLayer = true
+    guard let layer = content.layer else { return }
+
+    layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+    layer.position = CGPoint(x: content.bounds.midX, y: content.bounds.midY)
+
+    let spring = CASpringAnimation(keyPath: "transform.scale")
+    spring.fromValue = 0.82
+    spring.toValue = 1
+    spring.damping = 16
+    spring.stiffness = 260
+    spring.initialVelocity = 4
+    spring.duration = spring.settlingDuration
+    layer.add(spring, forKey: "pop-in")
+
+    tabletPanel.alphaValue = 0
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.16
+      tabletPanel.animator().alphaValue = 1
+    }
   }
 
   private func placeTabletAtBottom() {
@@ -346,7 +430,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func startRecording() {
-    guard !isRecording else { return }
+    // isStartingRecording covers the async mic-permission gap so a rapid
+    // double shortcut press can't spin up two sessions.
+    guard !isRecording, !isStartingRecording else { return }
+    isStartingRecording = true
 
     pasteTargetApp = currentExternalApp() ?? lastExternalApp
     showTabletPanel(positionAtBottom: true)
@@ -354,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     requestMicrophoneAccess { [weak self] granted in
       guard let self else { return }
       DispatchQueue.main.async {
+        defer { self.isStartingRecording = false }
         guard granted else {
           self.setStatus("Microphone permission is needed.")
           self.hideTablet(after: 1.4)
@@ -365,6 +453,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func beginRecorder() {
+    if Preferences.shared.transcriptionMode == .realtime {
+      beginRealtimeSession()
+      return
+    }
     do {
       let fileURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("hushly-\(UUID().uuidString)")
@@ -397,8 +489,175 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     }
   }
 
+  private func beginRealtimeSession() {
+    let session = RealtimeSession()
+    session.onLevel = { [weak self] level in
+      guard let self else { return }
+      self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (level * 0.32)
+      self.tabletView.audioLevel = self.smoothedAudioLevel
+    }
+    session.onInterim = { [weak self] _ in
+      guard let self, let session = self.realtimeSession else { return }
+      self.tabletView.liveText = session.liveDisplayText
+    }
+    session.onFinal = { [weak self] _ in
+      guard let self, let session = self.realtimeSession else { return }
+      self.tabletView.liveText = session.liveDisplayText
+    }
+    session.onError = { [weak self] message in
+      self?.setStatus(message)
+    }
+
+    do {
+      try session.start(url: realtimeURL(), apiKey: Preferences.shared.apiKey)
+    } catch {
+      // Don't leak the already-opened socket or the temp WAV.
+      session.cancel()
+      if let url = session.recordingURL {
+        try? FileManager.default.removeItem(at: url)
+      }
+      setStatus("Live session failed: \(error.localizedDescription)")
+      hideTablet(after: 1.6)
+      return
+    }
+
+    realtimeSession = session
+    isRecording = true
+    smoothedAudioLevel = 0
+    tabletView.isRecording = true
+    tabletView.audioLevel = 0
+    tabletView.liveText = ""
+    applyTabletAppearance()
+    placeTabletAtBottom() // recenter: the sheet expands for live text
+    registerEscapeHotKey()
+    installEscapeMonitors()
+    startGlowAnimation()
+    playStartSound()
+    setStatus("Listening (live)")
+  }
+
+  private func stopRealtimeSession() {
+    guard let session = realtimeSession else { return }
+    realtimeSession = nil
+    isRecording = false
+    tabletView.isRecording = false
+    tabletView.audioLevel = 0
+    applyTabletAppearance()
+    placeTabletAtBottom() // shrink back from the expanded live sheet
+    unregisterEscapeHotKey()
+    removeEscapeMonitors()
+    stopGlowAnimation()
+    playStopSound()
+    setStatus("Finishing")
+
+    Task { [weak self] in
+      let transcript = await session.finalize()
+      await self?.processRealtimeResult(transcript: transcript, fileURL: session.recordingURL)
+    }
+  }
+
+  private func processRealtimeResult(transcript: String, fileURL: URL?) async {
+    defer {
+      if let fileURL {
+        try? FileManager.default.removeItem(at: fileURL)
+      }
+    }
+    DispatchQueue.main.async {
+      self.tabletView.liveText = ""
+    }
+
+    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      // The connection may have died mid-session — keep the side-recorded
+      // WAV so the user can retry from History instead of losing the take.
+      if let fileURL, let savedURL = try? TranscriptStore.shared.storeAudio(fileURL) {
+        insertHistoryEntry(
+          TranscriptEntry(
+            id: UUID().uuidString,
+            createdAt: Date(),
+            rawText: "",
+            cleanedText: "",
+            audioPath: savedURL.path,
+            status: "Saved for retry"
+          )
+        )
+        setStatus("No transcript. Audio saved for retry.")
+      } else {
+        setStatus("No speech detected.")
+      }
+      hideTablet(after: 1.4)
+      return
+    }
+
+    let finalText: String
+    if Preferences.shared.polishWithGPT {
+      setStatus("Cleaning")
+      do {
+        finalText = try await clean(transcript: trimmed)
+      } catch {
+        finalText = trimmed
+        setStatus("Cleanup unavailable; pasting raw.")
+      }
+    } else {
+      finalText = trimmed
+    }
+
+    let savedURL = fileURL.flatMap { try? TranscriptStore.shared.storeAudio($0) }
+    insertHistoryEntry(
+      TranscriptEntry(
+        id: UUID().uuidString,
+        createdAt: Date(),
+        rawText: trimmed,
+        cleanedText: finalText,
+        audioPath: savedURL?.path,
+        status: "Complete"
+      )
+    )
+    paste(finalText)
+  }
+
+  private func cancelRealtimeForRetry() {
+    guard let session = realtimeSession else { return }
+    realtimeSession = nil
+    isRecording = false
+    tabletView.isRecording = false
+    tabletView.audioLevel = 0
+    tabletView.liveText = ""
+    applyTabletAppearance()
+    placeTabletAtBottom()
+    unregisterEscapeHotKey()
+    removeEscapeMonitors()
+    stopGlowAnimation()
+    playStopSound()
+    session.cancel()
+
+    if let fileURL = session.recordingURL,
+      let savedURL = try? TranscriptStore.shared.storeAudio(fileURL)
+    {
+      insertHistoryEntry(
+        TranscriptEntry(
+          id: UUID().uuidString,
+          createdAt: Date(),
+          rawText: "",
+          cleanedText: "",
+          audioPath: savedURL.path,
+          status: "Saved for retry"
+        )
+      )
+      setStatus("Saved for retry")
+      try? FileManager.default.removeItem(at: fileURL)
+    } else {
+      setStatus("Cancelled")
+    }
+    hideTablet(after: 1.2)
+  }
+
   private func stopRecording() {
     guard isRecording else { return }
+    if realtimeSession != nil {
+      stopRealtimeSession()
+      return
+    }
     let fileURL = recordingURL
     recorder?.stop()
     recorder = nil
@@ -424,6 +683,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func cancelRecordingForRetry() {
     guard isRecording else { return }
+    if realtimeSession != nil {
+      cancelRealtimeForRetry()
+      return
+    }
     let fileURL = recordingURL
     recorder?.stop()
     recorder = nil
@@ -515,7 +778,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func transcribe(fileURL: URL) async throws -> String {
     var request = URLRequest(url: transcribeURL())
     request.httpMethod = "POST"
-    request.setValue("audio/m4a", forHTTPHeaderField: "Content-Type")
+    // Realtime sessions store WAV retry audio; batch recordings are m4a.
+    let contentType = fileURL.pathExtension.lowercased() == "wav" ? "audio/wav" : "audio/m4a"
+    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
     addAPIKeyHeader(to: &request)
 
     let data = try Data(contentsOf: fileURL)
@@ -531,7 +796,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   // Both are applied at the Deepgram layer, so they work even when the GPT
   // polish step is off.
   private func transcribeURL() -> URL {
-    let base = apiURL(path: "/transcribe")
+    withAccuracyParams(apiURL(path: "/transcribe"))
+  }
+
+  // Realtime proxy endpoint: same origin as the REST API but ws(s) scheme.
+  // Dictionary + keyword params ride along so live sessions get the same
+  // Deepgram accuracy treatment as batch /transcribe.
+  private func realtimeURL() -> URL {
+    let base = withAccuracyParams(apiURL(path: "/realtime"))
+    guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+      return base
+    }
+    components.scheme = components.scheme == "http" ? "ws" : "wss"
+    return components.url ?? base
+  }
+
+  private func withAccuracyParams(_ base: URL) -> URL {
     guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
       return base
     }
@@ -814,18 +1094,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     chooseImageButton.bezelStyle = .rounded
     content.addSubview(chooseImageButton)
 
+    let adjustImageButton = NSButton(title: "Adjust Image...", target: self, action: #selector(adjustTabletImage))
+    adjustImageButton.frame = NSRect(x: 304, y: 424, width: 124, height: 30)
+    adjustImageButton.bezelStyle = .rounded
+    adjustImageButton.toolTip = "Reposition or re-zoom the current image inside the tablet"
+    content.addSubview(adjustImageButton)
+
     let clearImageButton = NSButton(title: "Clear Image", target: self, action: #selector(clearTabletImage))
-    clearImageButton.frame = NSRect(x: 304, y: 424, width: 112, height: 30)
+    clearImageButton.frame = NSRect(x: 440, y: 424, width: 124, height: 30)
     clearImageButton.bezelStyle = .rounded
     content.addSubview(clearImageButton)
 
     let imageStatus = NSTextField(labelWithString: tabletImageStatusText())
-    imageStatus.frame = NSRect(x: 168, y: 398, width: 220, height: 18)
+    imageStatus.frame = NSRect(x: 168, y: 400, width: 396, height: 16)
     imageStatus.font = NSFont.systemFont(ofSize: 11)
     imageStatus.textColor = NSColor.secondaryLabelColor
     imageStatus.lineBreakMode = .byTruncatingMiddle
     content.addSubview(imageStatus)
     tabletImageStatusLabel = imageStatus
+
+    addLabel("Image opacity", y: 372)
+    let opacitySlider = NSSlider(
+      value: Preferences.shared.tabletImageOpacity,
+      minValue: 0.1,
+      maxValue: 1,
+      target: self,
+      action: #selector(tabletAppearanceControlChanged)
+    )
+    opacitySlider.frame = NSRect(x: 168, y: 368, width: 220, height: 24)
+    opacitySlider.isContinuous = true
+    opacitySlider.toolTip = "How strongly the image shows through the glass"
+    content.addSubview(opacitySlider)
+    tabletImageOpacitySlider = opacitySlider
 
     let previewLabel = NSTextField(labelWithString: "Recording preview")
     previewLabel.frame = NSRect(x: 400, y: 386, width: 164, height: 18)
@@ -847,20 +1147,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletPreviewView = previewView
 
     let shapeLabel = NSTextField(labelWithString: "Shape")
-    shapeLabel.frame = NSRect(x: 32, y: 360, width: 120, height: 18)
+    shapeLabel.frame = NSRect(x: 32, y: 330, width: 120, height: 18)
     content.addSubview(shapeLabel)
 
     let shapeControl = NSSegmentedControl(labels: ["Rectangle", "Circle"], trackingMode: .selectOne, target: self, action: #selector(tabletAppearanceControlChanged))
-    shapeControl.frame = NSRect(x: 168, y: 354, width: 220, height: 28)
+    shapeControl.frame = NSRect(x: 168, y: 324, width: 220, height: 28)
     shapeControl.selectedSegment = Preferences.shared.tabletShape == .circle ? 1 : 0
     content.addSubview(shapeControl)
     tabletShapeControl = shapeControl
 
     let borderLabel = NSTextField(labelWithString: "Border color")
-    borderLabel.frame = NSRect(x: 32, y: 316, width: 120, height: 18)
+    borderLabel.frame = NSRect(x: 32, y: 284, width: 120, height: 18)
     content.addSubview(borderLabel)
 
-    let colorWell = NSColorWell(frame: NSRect(x: 168, y: 308, width: 58, height: 32))
+    let colorWell = NSColorWell(frame: NSRect(x: 168, y: 276, width: 58, height: 32))
     colorWell.color = Preferences.shared.tabletBorderColor
     colorWell.target = self
     colorWell.action = #selector(tabletAppearanceControlChanged)
@@ -868,11 +1168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletBorderColorWell = colorWell
 
     let shortcutLabel = NSTextField(labelWithString: "Shortcut")
-    shortcutLabel.frame = NSRect(x: 32, y: 274, width: 120, height: 18)
+    shortcutLabel.frame = NSRect(x: 32, y: 246, width: 120, height: 18)
     content.addSubview(shortcutLabel)
 
     let shortcutButton = NSButton(title: Preferences.shared.shortcut.title, target: self, action: #selector(beginShortcutCapture))
-    shortcutButton.frame = NSRect(x: 168, y: 268, width: 396, height: 32)
+    shortcutButton.frame = NSRect(x: 168, y: 240, width: 396, height: 30)
     shortcutButton.bezelStyle = .rounded
     content.addSubview(shortcutButton)
     self.shortcutButton = shortcutButton
@@ -918,6 +1218,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(mainStatus)
     mainStatusLabel = mainStatus
 
+    let modeControl = NSSegmentedControl(
+      labels: ["Transcribe on stop", "Live transcription"],
+      trackingMode: .selectOne,
+      target: self,
+      action: #selector(transcriptionModeChanged)
+    )
+    modeControl.frame = NSRect(x: 32, y: 22, width: 300, height: 26)
+    modeControl.selectedSegment = Preferences.shared.transcriptionMode == .realtime ? 1 : 0
+    modeControl.toolTip =
+      "On stop: record, then transcribe when you end dictation. Live: words stream onto the tablet as you speak."
+    content.addSubview(modeControl)
+    transcriptionModeControl = modeControl
+
     let polishCheckbox = NSButton(
       checkboxWithTitle: "Polish transcript with GPT (slower, cleaner)",
       target: self,
@@ -944,6 +1257,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   @objc private func togglePolishWithGPT(_ sender: NSButton) {
     Preferences.shared.polishWithGPT = (sender.state == .on)
+  }
+
+  @objc private func transcriptionModeChanged() {
+    let mode: TranscriptionMode = transcriptionModeControl?.selectedSegment == 1 ? .realtime : .batch
+    Preferences.shared.transcriptionMode = mode
+    setStatus(mode == .realtime ? "Live transcription on" : "Transcribe on stop")
   }
 
   private func buildDictionaryPane(frame: NSRect) -> NSView {
@@ -1233,11 +1552,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     tabletTextSizeSlider?.doubleValue = Preferences.shared.tabletTextSize
     tabletTextXSlider?.doubleValue = Preferences.shared.tabletTextOffsetX
     tabletTextYSlider?.doubleValue = Preferences.shared.tabletTextOffsetY
+    tabletImageOpacitySlider?.doubleValue = Preferences.shared.tabletImageOpacity
     apiBaseField?.stringValue = Preferences.shared.apiBase
     apiKeyField?.stringValue = Preferences.shared.apiKey
     dictionaryStatusLabel?.stringValue = dictionaryStatusText()
     usageStatusLabel?.stringValue = usageStatusText()
     shortcutButton?.title = Preferences.shared.shortcut.title
+    transcriptionModeControl?.selectedSegment = Preferences.shared.transcriptionMode == .realtime ? 1 : 0
     refreshAccessibilityStatus()
   }
 
@@ -1258,6 +1579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     view?.textSize = CGFloat(Preferences.shared.tabletTextSize)
     view?.textOffset = NSPoint(x: Preferences.shared.tabletTextOffsetX, y: Preferences.shared.tabletTextOffsetY)
     view?.customBackgroundImage = customTabletImage()
+    view?.imageOpacity = CGFloat(Preferences.shared.tabletImageOpacity)
     view?.isRecording = recording
     view?.audioLevel = audioLevel
   }
@@ -1291,16 +1613,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func layoutTabletPanel() {
     guard let tabletPanel, let content = tabletPanel.contentView else { return }
     let shape = Preferences.shared.tabletShape
-    let size = shape.panelSize
+    let expanded = isRecording && realtimeSession != nil && shape == .rectangle
+    let size = expanded ? shape.expandedPanelSize : shape.panelSize
     let origin = tabletPanel.frame.origin
     content.frame = NSRect(origin: .zero, size: size)
-    content.layer?.backgroundColor = NSColor.clear.cgColor
-    content.layer?.cornerRadius = shape == .circle ? size.width / 2 : 13
-    tabletView?.frame = shape.tabletFrame
+
+    let radius: CGFloat = shape == .circle ? size.width / 2 : 18
+    tabletBlurView?.frame = content.bounds
+    tabletBlurView?.maskImage = Self.glassMask(size: size, radius: radius)
+
+    tabletView?.frame = shape.tabletFrame(panelSize: size)
+    tabletView?.isExpanded = expanded
+
     statusLabel?.isHidden = shape == .circle
-    statusLabel?.frame = NSRect(x: 12, y: 3, width: size.width - 24, height: 10)
+    statusLabel?.frame = NSRect(x: 14, y: 4, width: size.width - 92, height: 10)
+    modePillButton?.isHidden = shape == .circle
+    modePillButton?.frame = NSRect(x: size.width - 66, y: 3, width: 54, height: 14)
+
     tabletPanel.setContentSize(size)
     tabletPanel.setFrameOrigin(origin)
+  }
+
+  // Resizable rounded-rect (or circle) mask that clips the blur to the glass
+  // sheet without killing NSVisualEffectView's blur pass.
+  private static func glassMask(size: NSSize, radius: CGFloat) -> NSImage {
+    let image = NSImage(size: size, flipped: false) { rect in
+      NSColor.black.setFill()
+      NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+      return true
+    }
+    image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+    image.resizingMode = .stretch
+    return image
   }
 
   private func layoutTabletPreview() {
@@ -1852,6 +2196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     Preferences.shared.tabletTextSize = tabletTextSizeSlider?.doubleValue ?? Preferences.shared.tabletTextSize
     Preferences.shared.tabletTextOffsetX = tabletTextXSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetX
     Preferences.shared.tabletTextOffsetY = tabletTextYSlider?.doubleValue ?? Preferences.shared.tabletTextOffsetY
+    Preferences.shared.tabletImageOpacity = tabletImageOpacitySlider?.doubleValue ?? Preferences.shared.tabletImageOpacity
     applyTabletAppearance()
     refreshSettingsFields()
     setStatus("Tablet appearance updated")
@@ -1875,19 +2220,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         self.setStatus("Image import failed")
         return
       }
+      // Held until Use Image — Cancel must not clobber the stored original.
+      self.pendingOriginalImageURL = url
       self.showCropWindow(for: image, shape: self.selectedTabletShape())
     }
   }
 
+  // Reopens the crop sheet on the stored original with the last-used zoom and
+  // offsets, so the image can be repositioned without re-importing.
+  @objc private func adjustTabletImage() {
+    let path = Preferences.shared.tabletOriginalImagePath
+    guard !path.isEmpty, let image = NSImage(contentsOfFile: path) else {
+      setStatus("Choose an image first")
+      return
+    }
+    showCropWindow(
+      for: image,
+      shape: selectedTabletShape(),
+      zoom: Preferences.shared.tabletImageZoom,
+      offsetX: Preferences.shared.tabletImageCropX,
+      offsetY: Preferences.shared.tabletImageCropY
+    )
+  }
+
   @objc private func clearTabletImage() {
     Preferences.shared.tabletImagePath = ""
+    Preferences.shared.tabletOriginalImagePath = ""
+    Preferences.shared.tabletImageZoom = 1
+    Preferences.shared.tabletImageCropX = 0
+    Preferences.shared.tabletImageCropY = 0
     try? TabletAssetStore.shared.clearBackground()
     applyTabletAppearance()
     refreshSettingsFields()
     setStatus("Tablet image cleared")
   }
 
-  private func showCropWindow(for image: NSImage, shape: TabletShape) {
+  private func showCropWindow(
+    for image: NSImage,
+    shape: TabletShape,
+    zoom: Double = 1,
+    offsetX: Double = 0,
+    offsetY: Double = 0
+  ) {
     cropWindow?.close()
     cropImage = image
     cropShape = shape
@@ -1921,9 +2295,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(preview)
     cropPreview = preview
 
-    cropZoomSlider = addCropSlider(to: content, title: "Zoom", y: 112, min: 1, max: 3, value: 1)
-    cropXSlider = addCropSlider(to: content, title: "Horizontal", y: 78, min: -1, max: 1, value: 0)
-    cropYSlider = addCropSlider(to: content, title: "Vertical", y: 44, min: -1, max: 1, value: 0)
+    cropZoomSlider = addCropSlider(to: content, title: "Zoom", y: 112, min: 1, max: 3, value: zoom)
+    cropXSlider = addCropSlider(to: content, title: "Horizontal", y: 78, min: -1, max: 1, value: offsetX)
+    cropYSlider = addCropSlider(to: content, title: "Vertical", y: 44, min: -1, max: 1, value: offsetY)
+    preview.zoom = CGFloat(zoom)
+    preview.offsetX = CGFloat(offsetX)
+    preview.offsetY = CGFloat(offsetY)
 
     let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelCropImage))
     cancelButton.frame = NSRect(x: 304, y: 10, width: 84, height: 28)
@@ -1982,6 +2359,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       )
       Preferences.shared.tabletImagePath = croppedURL.path
       Preferences.shared.tabletShape = cropShape
+      Preferences.shared.tabletImageZoom = cropZoomSlider?.doubleValue ?? 1
+      Preferences.shared.tabletImageCropX = cropXSlider?.doubleValue ?? 0
+      Preferences.shared.tabletImageCropY = cropYSlider?.doubleValue ?? 0
+      if let pendingURL = pendingOriginalImageURL,
+        let originalURL = try? TabletAssetStore.shared.storeOriginal(from: pendingURL)
+      {
+        Preferences.shared.tabletOriginalImagePath = originalURL.path
+      }
       applyTabletAppearance()
       refreshSettingsFields()
       setStatus("Tablet image updated")
@@ -2003,6 +2388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     cropXSlider = nil
     cropYSlider = nil
     cropImage = nil
+    pendingOriginalImageURL = nil
   }
 
   @objc private func saveSettings() {
@@ -2180,11 +2566,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     animationTimer?.invalidate()
     animationTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
       guard let self else { return }
-      self.recorder?.updateMeters()
-      let averagePower = self.recorder?.averagePower(forChannel: 0) ?? -80
-      let normalized = max(0, min(1, CGFloat((averagePower + 50) / 50)))
-      self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (normalized * 0.32)
-      self.tabletView.audioLevel = self.smoothedAudioLevel
+      // Realtime sessions push levels via RealtimeSession.onLevel; the timer
+      // then only drives the waveform's phase animation.
+      if let recorder = self.recorder {
+        recorder.updateMeters()
+        let averagePower = recorder.averagePower(forChannel: 0)
+        let normalized = max(0, min(1, CGFloat((averagePower + 50) / 50)))
+        self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (normalized * 0.32)
+        self.tabletView.audioLevel = self.smoothedAudioLevel
+      }
       self.tabletView.needsDisplay = true
     }
   }
@@ -2198,7 +2588,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private func hideTablet(after delay: TimeInterval) {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
       guard !self.isRecording else { return }
-      self.tabletPanel.orderOut(nil)
+      NSAnimationContext.runAnimationGroup({ context in
+        context.duration = 0.18
+        self.tabletPanel.animator().alphaValue = 0
+      }, completionHandler: {
+        guard !self.isRecording else {
+          self.tabletPanel.alphaValue = 1
+          return
+        }
+        self.tabletPanel.orderOut(nil)
+        self.tabletPanel.alphaValue = 1
+      })
     }
   }
 
@@ -2248,6 +2648,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 }
 
+enum TranscriptionMode: String {
+  case batch
+  case realtime
+}
+
 enum TabletShape: String {
   case rectangle
   case circle
@@ -2255,18 +2660,29 @@ enum TabletShape: String {
   var panelSize: NSSize {
     switch self {
     case .rectangle:
-      return NSSize(width: 216, height: 50)
+      return NSSize(width: 264, height: 72)
     case .circle:
-      return NSSize(width: 78, height: 78)
+      return NSSize(width: 84, height: 84)
     }
   }
 
-  var tabletFrame: NSRect {
+  // Realtime sessions grow the glass sheet so streaming text has room.
+  // The circle keeps its size — it has no live-text region.
+  var expandedPanelSize: NSSize {
     switch self {
     case .rectangle:
-      return NSRect(x: 8, y: 14, width: 200, height: 31)
+      return NSSize(width: 384, height: 148)
     case .circle:
-      return NSRect(x: 8, y: 8, width: 62, height: 62)
+      return panelSize
+    }
+  }
+
+  func tabletFrame(panelSize size: NSSize) -> NSRect {
+    switch self {
+    case .rectangle:
+      return NSRect(x: 8, y: 18, width: size.width - 16, height: size.height - 26)
+    case .circle:
+      return NSRect(x: 11, y: 11, width: size.width - 22, height: size.height - 22)
     }
   }
 
@@ -2379,7 +2795,23 @@ final class TabletView: NSView {
     didSet { needsDisplay = true }
   }
 
+  // Opacity of the custom image layered inside the glass (user slider).
+  var imageOpacity: CGFloat = 0.55 {
+    didSet { needsDisplay = true }
+  }
+
+  // True while a realtime session has grown the sheet for streaming text.
+  var isExpanded = false {
+    didSet { needsDisplay = true }
+  }
+
   var statusText = "Ready" {
+    didSet { needsDisplay = true }
+  }
+
+  // Streaming transcript shown while a realtime session is active. When
+  // non-empty it replaces displayText so the user watches words land live.
+  var liveText = "" {
     didSet { needsDisplay = true }
   }
 
@@ -2395,56 +2827,86 @@ final class TabletView: NSView {
     true
   }
 
-  private lazy var generatedAsset: NSImage? = {
-    guard let url = Bundle.main.url(forResource: "tablet-glow", withExtension: "png") else { return nil }
-    return NSImage(contentsOf: url)
-  }()
-
   override func draw(_ dirtyRect: NSRect) {
     NSColor.clear.setFill()
     dirtyRect.fill()
 
-    let clipPath = shapePath(in: bounds.insetBy(dx: 2, dy: 2))
+    // The blur lives in the panel's NSVisualEffectView behind this view;
+    // here we composite the glass tint, the user's translucent image, the
+    // rim light, and the content.
+    let clipPath = shapePath(in: bounds.insetBy(dx: 1, dy: 1))
     NSGraphicsContext.saveGraphicsState()
     clipPath.addClip()
+
+    NSColor(calibratedWhite: 0, alpha: 0.22).setFill()
+    bounds.fill()
+
     if let customBackgroundImage {
-      customBackgroundImage.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: isRecording ? 1 : 0.88)
-    } else if let generatedAsset {
-      generatedAsset.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: isRecording ? 1 : 0.78)
-    } else {
-      drawFallbackFill(in: bounds)
+      let fraction = min(1, max(0.05, imageOpacity + (isRecording ? 0.08 : 0)))
+      customBackgroundImage.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: fraction)
     }
+
+    // Top sheen: soft vertical highlight that sells the glass curvature.
+    let sheen = NSGradient(
+      starting: NSColor(calibratedWhite: 1, alpha: 0.16),
+      ending: NSColor(calibratedWhite: 1, alpha: 0)
+    )
+    let sheenRect = NSRect(x: bounds.minX, y: bounds.midY, width: bounds.width, height: bounds.height / 2)
+    sheen?.draw(in: sheenRect, angle: -90)
+
     NSGraphicsContext.restoreGraphicsState()
 
-    drawGlow()
-    if showsDisplayText {
+    drawRimLight()
+    drawGrabHandle()
+    if showsDisplayText || isRecording {
       drawDisplayText()
     }
     drawWaveform()
   }
 
-  private func drawFallbackFill(in rect: NSRect) {
-    NSColor(calibratedRed: 0.02, green: 0.03, blue: 0.07, alpha: 0.92).setFill()
-    rect.fill()
+  private func drawRimLight() {
+    let stroke = shapePath(in: bounds.insetBy(dx: 1.5, dy: 1.5))
+    if isRecording {
+      NSGraphicsContext.saveGraphicsState()
+      let glow = NSShadow()
+      glow.shadowColor = borderColor.withAlphaComponent(0.7)
+      glow.shadowBlurRadius = 6 + (audioLevel * 6)
+      glow.shadowOffset = .zero
+      glow.set()
+      borderColor.withAlphaComponent(0.85).setStroke()
+      stroke.lineWidth = 1.5
+      stroke.stroke()
+      NSGraphicsContext.restoreGraphicsState()
+    } else {
+      NSColor(calibratedWhite: 1, alpha: 0.28).setStroke()
+      stroke.lineWidth = 1
+      stroke.stroke()
+    }
   }
 
-  private func drawGlow() {
-    let stroke = shapePath(in: bounds.insetBy(dx: 3, dy: 3))
-    borderColor.withAlphaComponent(isRecording ? 0.72 : 0.46).setStroke()
-    stroke.lineWidth = isRecording ? 2 : 1
-    stroke.stroke()
+  private func drawGrabHandle() {
+    guard shape == .rectangle else { return }
+    let handle = NSRect(x: bounds.midX - 18, y: bounds.maxY - 9, width: 36, height: 4.5)
+    NSColor(calibratedWhite: 1, alpha: 0.3).setFill()
+    NSBezierPath(roundedRect: handle, xRadius: 2.25, yRadius: 2.25).fill()
   }
 
   private func drawDisplayText() {
+    let live = liveText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if isRecording && !live.isEmpty {
+      drawLiveTranscript(live)
+      return
+    }
+
     let cleanText = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !cleanText.isEmpty else { return }
+    guard !cleanText.isEmpty, showsDisplayText else { return }
 
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
     paragraph.lineBreakMode = .byTruncatingTail
 
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor(calibratedRed: 0.10, green: 0.92, blue: 1, alpha: 0.88)
+    shadow.shadowColor = borderColor.withAlphaComponent(0.88)
     shadow.shadowBlurRadius = isRecording ? 8 : 4
     shadow.shadowOffset = .zero
 
@@ -2470,6 +2932,74 @@ final class TabletView: NSView {
     )
     let textRect = clamp(unclamped, inside: maxRect)
     (cleanText as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
+  }
+
+  // Streaming transcript: wrapped, centered, always showing the newest words.
+  // When the text outgrows the area we binary-search the shortest suffix that
+  // still fits (suffixes are monotonic in height), prefixed with an ellipsis.
+  private func drawLiveTranscript(_ text: String) {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .center
+    paragraph.lineBreakMode = .byWordWrapping
+
+    let fontSize: CGFloat = isExpanded ? 15 : 12
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
+      .foregroundColor: NSColor.white.withAlphaComponent(0.96),
+      .paragraphStyle: paragraph,
+    ]
+
+    // Leave room for the grab handle above and the waveform below.
+    let topInset: CGFloat = shape == .rectangle ? 14 : 18
+    let bottomInset: CGFloat = 22
+    let area = NSRect(
+      x: bounds.minX + 16,
+      y: bounds.minY + bottomInset,
+      width: bounds.width - 32,
+      height: max(14, bounds.height - bottomInset - topInset)
+    )
+    guard area.width > 20 else { return }
+
+    let words = text.split(separator: " ").map(String.init)
+    func rendered(from start: Int) -> String {
+      let suffix = words[start...].joined(separator: " ")
+      return start == 0 ? suffix : "… " + suffix
+    }
+    func height(of string: String) -> CGFloat {
+      (string as NSString).boundingRect(
+        with: NSSize(width: area.width, height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin],
+        attributes: attrs
+      ).height
+    }
+
+    var display = rendered(from: 0)
+    if height(of: display) > area.height, words.count > 1 {
+      var low = 1
+      var high = words.count - 1
+      while low < high {
+        let mid = (low + high) / 2
+        if height(of: rendered(from: mid)) <= area.height {
+          high = mid
+        } else {
+          low = mid + 1
+        }
+      }
+      display = rendered(from: low)
+    }
+
+    let measured = min(height(of: display), area.height)
+    let drawRect = NSRect(
+      x: area.minX,
+      y: area.midY - (measured / 2),
+      width: area.width,
+      height: measured
+    )
+    (display as NSString).draw(
+      with: drawRect,
+      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+      attributes: attrs
+    )
   }
 
   private func fittedFont(for text: String, requestedSize: CGFloat, maxSize: NSSize) -> NSFont {
@@ -2499,8 +3029,8 @@ final class TabletView: NSView {
   }
 
   private func drawWaveform() {
-    let barCount = 12
-    let totalWidth: CGFloat = shape == .circle ? 38 : 78
+    let barCount = isExpanded ? 22 : 12
+    let totalWidth: CGFloat = shape == .circle ? 38 : (isExpanded ? 150 : 84)
     let startX = bounds.midX - (totalWidth / 2)
     let baseY: CGFloat = 7
     let phase = CGFloat(Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10))
@@ -2512,7 +3042,7 @@ final class TabletView: NSView {
       let height = isRecording ? max(2, liveHeight) : 2
       let rect = NSRect(x: x, y: baseY, width: 2.4, height: height)
       let path = NSBezierPath(roundedRect: rect, xRadius: 1.2, yRadius: 1.2)
-      NSColor(calibratedRed: 0.18, green: 0.92, blue: 1, alpha: isRecording ? 0.95 : 0.34).setFill()
+      borderColor.withAlphaComponent(isRecording ? 0.95 : 0.34).setFill()
       path.fill()
     }
   }
@@ -2687,6 +3217,12 @@ final class Preferences {
   private let dictionaryTextKey = "dictionaryText"
   private let keywordsTextKey = "keywordsText"
   private let polishWithGPTKey = "polishWithGPT"
+  private let transcriptionModeKey = "transcriptionMode"
+  private let tabletImageOpacityKey = "tabletImageOpacity"
+  private let tabletOriginalImagePathKey = "tabletOriginalImagePath"
+  private let tabletImageZoomKey = "tabletImageZoom"
+  private let tabletImageCropXKey = "tabletImageCropX"
+  private let tabletImageCropYKey = "tabletImageCropY"
 
   var tabletText: String {
     get {
@@ -2714,6 +3250,44 @@ final class Preferences {
     set {
       defaults.set(newValue, forKey: tabletImagePathKey)
     }
+  }
+
+  // How strongly the custom image shows through the glass (0.1 faint – 1 solid).
+  var tabletImageOpacity: Double {
+    get {
+      let value = defaults.object(forKey: tabletImageOpacityKey) == nil
+        ? 0.55
+        : defaults.double(forKey: tabletImageOpacityKey)
+      return min(max(value, 0.1), 1)
+    }
+    set {
+      defaults.set(min(max(newValue, 0.1), 1), forKey: tabletImageOpacityKey)
+    }
+  }
+
+  // Uncropped source image + last crop parameters, kept so "Adjust Image..."
+  // can reposition without re-importing.
+  var tabletOriginalImagePath: String {
+    get { defaults.string(forKey: tabletOriginalImagePathKey) ?? "" }
+    set { defaults.set(newValue, forKey: tabletOriginalImagePathKey) }
+  }
+
+  var tabletImageZoom: Double {
+    get {
+      let value = defaults.object(forKey: tabletImageZoomKey) == nil ? 1 : defaults.double(forKey: tabletImageZoomKey)
+      return min(max(value, 1), 3)
+    }
+    set { defaults.set(min(max(newValue, 1), 3), forKey: tabletImageZoomKey) }
+  }
+
+  var tabletImageCropX: Double {
+    get { min(max(defaults.double(forKey: tabletImageCropXKey), -1), 1) }
+    set { defaults.set(min(max(newValue, -1), 1), forKey: tabletImageCropXKey) }
+  }
+
+  var tabletImageCropY: Double {
+    get { min(max(defaults.double(forKey: tabletImageCropYKey), -1), 1) }
+    set { defaults.set(min(max(newValue, -1), 1), forKey: tabletImageCropYKey) }
   }
 
   var tabletShape: TabletShape {
@@ -2826,6 +3400,17 @@ final class Preferences {
     }
     set {
       defaults.set(newValue, forKey: polishWithGPTKey)
+    }
+  }
+
+  // batch: record → /transcribe on stop (default, matches historical flow).
+  // realtime: stream mic audio to /realtime and show words as they land.
+  var transcriptionMode: TranscriptionMode {
+    get {
+      TranscriptionMode(rawValue: defaults.string(forKey: transcriptionModeKey) ?? "") ?? .batch
+    }
+    set {
+      defaults.set(newValue.rawValue, forKey: transcriptionModeKey)
     }
   }
 
@@ -3068,9 +3653,10 @@ final class TranscriptStore {
   func storeAudio(_ sourceURL: URL) throws -> URL {
     let audioURL = supportURL.appendingPathComponent("Audio", isDirectory: true)
     try FileManager.default.createDirectory(at: audioURL, withIntermediateDirectories: true)
+    let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
     let destination = audioURL
       .appendingPathComponent("pending-\(UUID().uuidString)")
-      .appendingPathExtension("m4a")
+      .appendingPathExtension(ext)
     try FileManager.default.copyItem(at: sourceURL, to: destination)
     return destination
   }
@@ -3113,6 +3699,21 @@ final class TabletAssetStore {
     if FileManager.default.fileExists(atPath: backgroundURL.path) {
       try FileManager.default.removeItem(at: backgroundURL)
     }
+    let originalURL = supportURL.appendingPathComponent("tablet-background-original.png")
+    if FileManager.default.fileExists(atPath: originalURL.path) {
+      try FileManager.default.removeItem(at: originalURL)
+    }
+  }
+
+  // Copies the user's chosen file untouched so Adjust Image can re-crop from
+  // full quality later. Extension is normalized away — NSImage sniffs content.
+  func storeOriginal(from sourceURL: URL) throws -> URL {
+    let destination = supportURL.appendingPathComponent("tablet-background-original.png")
+    if FileManager.default.fileExists(atPath: destination.path) {
+      try FileManager.default.removeItem(at: destination)
+    }
+    try FileManager.default.copyItem(at: sourceURL, to: destination)
+    return destination
   }
 
   private func croppedPNGRepresentation(

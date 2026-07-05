@@ -29,6 +29,7 @@ swiftc \
   -parse-as-library \
   -F "$SPARKLE_CACHE" \
   "$ROOT/desktop/macos/HushlyLite.swift" \
+  "$ROOT/desktop/macos/RealtimeSession.swift" \
   -framework Cocoa \
   -framework ApplicationServices \
   -framework AVFoundation \
@@ -40,7 +41,6 @@ swiftc \
   -o "$MACOS_DIR/HushlyLite"
 
 cp "$ROOT/desktop/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
-cp "$ROOT/desktop/macos/Assets/tablet-glow.png" "$RESOURCES_DIR/tablet-glow.png"
 ditto "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/Sparkle.framework"
 
 if command -v codesign >/dev/null 2>&1; then
