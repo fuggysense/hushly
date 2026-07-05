@@ -312,7 +312,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     // Liquid glass base: real behind-window blur clipped to the tablet shape
     // (via maskImage — layer cornerRadius breaks NSVisualEffectView blur).
     let blur = NSVisualEffectView(frame: contentRect)
-    blur.material = .hudWindow
+    // .fullScreenUI is one of the clearest dark materials — .hudWindow reads
+    // nearly opaque, which defeats the glass look.
+    blur.material = .fullScreenUI
     blur.blendingMode = .behindWindow
     blur.state = .active
     blur.appearance = NSAppearance(named: .darkAqua)
@@ -547,8 +549,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     isRecording = false
     tabletView.isRecording = false
     tabletView.audioLevel = 0
-    applyTabletAppearance()
-    placeTabletAtBottom() // shrink back from the expanded live sheet
+    // No relayout here — the sheet keeps its size and text and simply fades;
+    // hideTablet's completion resets it once it's offscreen.
     unregisterEscapeHotKey()
     removeEscapeMonitors()
     stopGlowAnimation()
@@ -567,9 +569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         try? FileManager.default.removeItem(at: fileURL)
       }
     }
-    DispatchQueue.main.async {
-      self.tabletView.liveText = ""
-    }
+    // liveText stays visible during the fade; hideTablet's completion clears it.
 
     let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -627,9 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     isRecording = false
     tabletView.isRecording = false
     tabletView.audioLevel = 0
-    tabletView.liveText = ""
-    applyTabletAppearance()
-    placeTabletAtBottom()
+    // Keep size and live text as-is; the sheet fades from its current state.
     unregisterEscapeHotKey()
     removeEscapeMonitors()
     stopGlowAnimation()
@@ -2625,6 +2623,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         }
         self.tabletPanel.orderOut(nil)
         self.tabletPanel.alphaValue = 1
+        // Reset live-session state offscreen so the next show starts clean.
+        self.tabletView.liveText = ""
+        self.layoutTabletPanel()
       })
     }
   }
@@ -2868,11 +2869,13 @@ final class TabletView: NSView {
     NSGraphicsContext.saveGraphicsState()
     clipPath.addClip()
 
-    NSColor(calibratedWhite: 0, alpha: 0.22).setFill()
+    // Keep the tint whisper-thin — the whole point of the glass is seeing
+    // the desktop blur through it.
+    NSColor(calibratedWhite: 0, alpha: 0.06).setFill()
     bounds.fill()
 
     if let customBackgroundImage {
-      let fraction = min(1, max(0.05, imageOpacity + (isRecording ? 0.08 : 0)))
+      let fraction = min(1, max(0.05, imageOpacity))
       // Aspect-fill: crop the source to the view's aspect instead of
       // stretching — the live sheet's proportions differ from the baked crop.
       let source = TabletAssetStore.cropRect(
@@ -2897,7 +2900,7 @@ final class TabletView: NSView {
 
     drawRimLight()
     drawGrabHandle()
-    if showsDisplayText || isRecording {
+    if showsDisplayText || !liveText.isEmpty {
       drawDisplayText()
     }
     drawWaveform()
@@ -2931,8 +2934,10 @@ final class TabletView: NSView {
   }
 
   private func drawDisplayText() {
+    // Live text persists through the post-stop fade (isRecording is already
+    // false while finishing) — it's cleared once the sheet is offscreen.
     let live = liveText.trimmingCharacters(in: .whitespacesAndNewlines)
-    if isRecording && !live.isEmpty {
+    if !live.isEmpty {
       drawLiveTranscript(live)
       return
     }
