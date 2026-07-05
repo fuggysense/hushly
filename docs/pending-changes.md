@@ -17,6 +17,7 @@ This file tracks local changes that have not been shipped through Sparkle.
   - Server: `server/http.js` gains a `/realtime` WebSocket upgrade handler (auth via internal call to new `/auth-check` route; unauthorized closes 4401). Verified locally: server boots, WS upgrade + auth rejection path tested. Live Deepgram path requires the deployed VPS env. Realtime sessions do not yet record `api_usage_events` (known gap).
 - Reversible by: reverting the git commit that contains this entry and the matching file changes.
 - Sparkle approval: not requested.
+- 2026-07-05 crash fix: realtime mode SIGTRAP'd on the first mic buffer — `AVAudioFile(forWriting:settings:)` defaults processingFormat to deinterleaved Float32, and writing interleaved Int16 buffers trips a CoreAudio assert (`ExtAudioFile::WriteInputProc` → `CAVerboseAbort`). Fixed by pinning `commonFormat: .pcmFormatInt16, interleaved: true` at file creation. Reproduced and verified both ways with an isolated AVAudioFile write harness (old init = exit 133, new init = clean WAV).
 
 ## 2026-06-29
 

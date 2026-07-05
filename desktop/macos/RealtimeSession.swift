@@ -55,7 +55,16 @@ final class RealtimeSession: NSObject, @unchecked Sendable {
     let fileURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("hushly-live-\(UUID().uuidString)")
       .appendingPathExtension("wav")
-    let file = try AVAudioFile(forWriting: fileURL, settings: Self.targetFormat.settings)
+    // commonFormat/interleaved MUST match the buffers handleTap writes —
+    // the settings-only initializer defaults processingFormat to
+    // deinterleaved Float32 and CoreAudio traps (SIGTRAP) on the first
+    // mismatched write.
+    let file = try AVAudioFile(
+      forWriting: fileURL,
+      settings: Self.targetFormat.settings,
+      commonFormat: .pcmFormatInt16,
+      interleaved: true
+    )
     fileQueue.sync { audioFile = file }
     recordingURL = fileURL
 
