@@ -92,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var transcriptionModeControl: NSSegmentedControl?
   private var tabletBlurView: NSVisualEffectView?
   private var modePillButton: NSButton?
+  // Current height of the live sheet; grows (never shrinks) within a session.
+  private var liveSheetHeight: CGFloat = TabletShape.rectangle.expandedPanelSize.height
   private var tabletImageOpacitySlider: NSSlider?
   private var pasteTargetApp: NSRunningApplication?
   private var lastExternalApp: NSRunningApplication?
@@ -499,10 +501,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     session.onInterim = { [weak self] _ in
       guard let self, let session = self.realtimeSession else { return }
       self.tabletView.liveText = session.liveDisplayText
+      self.growLiveSheetIfNeeded()
     }
     session.onFinal = { [weak self] _ in
       guard let self, let session = self.realtimeSession else { return }
       self.tabletView.liveText = session.liveDisplayText
+      self.growLiveSheetIfNeeded()
     }
     session.onError = { [weak self] message in
       self?.setStatus(message)
@@ -524,6 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     realtimeSession = session
     isRecording = true
     smoothedAudioLevel = 0
+    liveSheetHeight = TabletShape.rectangle.expandedPanelSize.height
     tabletView.isRecording = true
     tabletView.audioLevel = 0
     tabletView.liveText = ""
@@ -1610,11 +1615,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     return font
   }
 
-  private func layoutTabletPanel() {
+  private func layoutTabletPanel(animated: Bool = false) {
     guard let tabletPanel, let content = tabletPanel.contentView else { return }
     let shape = Preferences.shared.tabletShape
     let expanded = isRecording && realtimeSession != nil && shape == .rectangle
-    let size = expanded ? shape.expandedPanelSize : shape.panelSize
+    let size = expanded
+      ? NSSize(width: shape.expandedPanelSize.width, height: liveSheetHeight)
+      : shape.panelSize
     let origin = tabletPanel.frame.origin
     content.frame = NSRect(origin: .zero, size: size)
 
@@ -1630,8 +1637,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     modePillButton?.isHidden = shape == .circle
     modePillButton?.frame = NSRect(x: size.width - 66, y: 3, width: 54, height: 14)
 
-    tabletPanel.setContentSize(size)
-    tabletPanel.setFrameOrigin(origin)
+    if animated {
+      // Origin (bottom-left) stays put, so added height rises upward.
+      tabletPanel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+    } else {
+      tabletPanel.setContentSize(size)
+      tabletPanel.setFrameOrigin(origin)
+    }
+  }
+
+  // Called on each transcript update: measure the wrapped live text and let
+  // the sheet rise (grow-only) to fit, up to liveMaxHeight. Once capped,
+  // drawLiveTranscript trims from the head instead.
+  private func growLiveSheetIfNeeded() {
+    guard realtimeSession != nil, Preferences.shared.tabletShape == .rectangle else { return }
+    let panelWidth = TabletShape.rectangle.expandedPanelSize.width
+    // panel → tablet frame (-16) → text insets (-32); height adds back the
+    // text's top/bottom insets (36) and the tablet frame's chrome (26).
+    let textHeight = TabletView.liveTextHeight(tabletView.liveText, width: panelWidth - 48, expanded: true)
+    let needed = min(max(TabletShape.rectangle.expandedPanelSize.height, textHeight + 62), TabletShape.liveMaxHeight)
+    guard needed > liveSheetHeight else { return }
+    liveSheetHeight = needed
+    layoutTabletPanel(animated: true)
   }
 
   // Resizable rounded-rect (or circle) mask that clips the blur to the glass
@@ -2666,16 +2693,19 @@ enum TabletShape: String {
     }
   }
 
-  // Realtime sessions grow the glass sheet so streaming text has room.
+  // Starting size of the live sheet; it rises from here as text wraps onto
+  // more lines (AppDelegate.growLiveSheetIfNeeded, capped at liveMaxHeight).
   // The circle keeps its size — it has no live-text region.
   var expandedPanelSize: NSSize {
     switch self {
     case .rectangle:
-      return NSSize(width: 384, height: 148)
+      return NSSize(width: 384, height: 96)
     case .circle:
       return panelSize
     }
   }
+
+  static let liveMaxHeight: CGFloat = 264
 
   func tabletFrame(panelSize size: NSSize) -> NSRect {
     switch self {
@@ -2843,7 +2873,16 @@ final class TabletView: NSView {
 
     if let customBackgroundImage {
       let fraction = min(1, max(0.05, imageOpacity + (isRecording ? 0.08 : 0)))
-      customBackgroundImage.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: fraction)
+      // Aspect-fill: crop the source to the view's aspect instead of
+      // stretching — the live sheet's proportions differ from the baked crop.
+      let source = TabletAssetStore.cropRect(
+        for: customBackgroundImage.size,
+        targetAspect: bounds.width / max(1, bounds.height),
+        zoom: 1,
+        offsetX: 0,
+        offsetY: 0
+      )
+      customBackgroundImage.draw(in: bounds, from: source, operation: .sourceOver, fraction: fraction)
     }
 
     // Top sheen: soft vertical highlight that sells the glass curvature.
@@ -2934,20 +2973,42 @@ final class TabletView: NSView {
     (cleanText as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
   }
 
-  // Streaming transcript: wrapped, centered, always showing the newest words.
-  // When the text outgrows the area we binary-search the shortest suffix that
-  // still fits (suffixes are monotonic in height), prefixed with an ellipsis.
-  private func drawLiveTranscript(_ text: String) {
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.alignment = .center
-    paragraph.lineBreakMode = .byWordWrapping
+  private static func liveFont(expanded: Bool) -> NSFont {
+    NSFont.systemFont(ofSize: expanded ? 15 : 12, weight: .medium)
+  }
 
-    let fontSize: CGFloat = isExpanded ? 15 : 12
-    let attrs: [NSAttributedString.Key: Any] = [
-      .font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
+  private static func liveAttributes(expanded: Bool) -> [NSAttributedString.Key: Any] {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .left
+    paragraph.lineBreakMode = .byWordWrapping
+    return [
+      .font: liveFont(expanded: expanded),
       .foregroundColor: NSColor.white.withAlphaComponent(0.96),
       .paragraphStyle: paragraph,
     ]
+  }
+
+  // Wrapped height of the live transcript at a given width — used by the
+  // AppDelegate to decide how far the sheet should rise.
+  static func liveTextHeight(_ text: String, width: CGFloat, expanded: Bool) -> CGFloat {
+    let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !clean.isEmpty, width > 20 else { return 0 }
+    return ceil(
+      (clean as NSString).boundingRect(
+        with: NSSize(width: width, height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin],
+        attributes: liveAttributes(expanded: expanded)
+      ).height
+    )
+  }
+
+  // Streaming transcript: left-aligned and anchored to the top so words read
+  // naturally left→right, top→down as they arrive. When the text outgrows
+  // the area (sheet already at max height) we binary-search the shortest
+  // suffix that still fits (suffixes are monotonic in height), prefixed with
+  // an ellipsis.
+  private func drawLiveTranscript(_ text: String) {
+    let attrs = Self.liveAttributes(expanded: isExpanded)
 
     // Leave room for the grab handle above and the waveform below.
     let topInset: CGFloat = shape == .rectangle ? 14 : 18
@@ -2989,9 +3050,10 @@ final class TabletView: NSView {
     }
 
     let measured = min(height(of: display), area.height)
+    // Top-anchored (non-flipped coords: top is maxY) so text flows downward.
     let drawRect = NSRect(
       x: area.minX,
-      y: area.midY - (measured / 2),
+      y: area.maxY - measured,
       width: area.width,
       height: measured
     )
