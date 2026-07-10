@@ -64,6 +64,46 @@ enum AudioDeviceManager {
     inputDevices().first(where: { $0.uid == uid })?.id
   }
 
+  static func defaultInputDeviceID() -> AudioDeviceID? {
+    var address = propertyAddress(kAudioHardwarePropertyDefaultInputDevice)
+    var deviceID = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    guard
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
+      deviceID != 0
+    else { return nil }
+    return deviceID
+  }
+
+  static func transportType(_ id: AudioDeviceID) -> UInt32 {
+    var address = propertyAddress(kAudioDevicePropertyTransportType)
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else { return 0 }
+    return value
+  }
+
+  // A Bluetooth mic is the one input that can't coexist with music on the same
+  // earpiece: opening it forces the headset from A2DP (stereo playback) into
+  // HFP/SCO (mono call mode), which drops or degrades whatever's playing. USB /
+  // built-in mics are independent HAL devices and never touch the earpiece.
+  static func isBluetooth(_ id: AudioDeviceID) -> Bool {
+    let t = transportType(id)
+    return t == kAudioDeviceTransportTypeBluetooth || t == kAudioDeviceTransportTypeBluetoothLE
+  }
+
+  // Which mic to actually open. An explicit selection always wins (the user
+  // asked for it). In System-default mode, if the default input is a Bluetooth
+  // earpiece, capturing from it would interrupt music playing on that same
+  // earpiece — so fall back to the first non-Bluetooth input instead. Empty
+  // return means "the system default is safe, let the engine use it."
+  static func resolveCaptureUID(selected uid: String) -> String {
+    if !uid.isEmpty { return uid }
+    guard let defaultID = defaultInputDeviceID(), isBluetooth(defaultID) else { return "" }
+    return inputDevices().first(where: { !isBluetooth($0.id) })?.uid ?? ""
+  }
+
   // Point an AVAudioEngine's input node at the chosen device. Empty UID (or a
   // device that has since disappeared) is a no-op, so we fall back to the
   // system default. Must be called before reading the input format / starting.

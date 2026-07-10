@@ -470,7 +470,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (level * 0.32)
         self.tabletView.audioLevel = self.smoothedAudioLevel
       }
-      try recorder.start(inputDeviceUID: Preferences.shared.inputDeviceUID)
+      try recorder.start(
+        inputDeviceUID: AudioDeviceManager.resolveCaptureUID(
+          selected: Preferences.shared.inputDeviceUID))
 
       self.recorder = recorder
       self.recordingURL = recorder.recordingURL
@@ -514,7 +516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       try session.start(
         url: realtimeURL(),
         apiKey: Preferences.shared.apiKey,
-        inputDeviceUID: Preferences.shared.inputDeviceUID)
+        inputDeviceUID: AudioDeviceManager.resolveCaptureUID(
+          selected: Preferences.shared.inputDeviceUID))
     } catch {
       // Don't leak the already-opened socket or the temp WAV.
       session.cancel()

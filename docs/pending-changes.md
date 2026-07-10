@@ -4,6 +4,19 @@ This file tracks local changes that have not been shipped through Sparkle.
 
 ## 2026-07-10
 
+### Don't interrupt earpiece music: never auto-open a Bluetooth mic
+
+- Status: local only, not shipped to Sparkle. No server changes.
+- Major-change count: 1 (capture never forces a Bluetooth earpiece into call mode on its own).
+- Scope: `desktop/macos/AudioCapture.swift`, `desktop/macos/HushlyLite.swift`.
+- Why: on macOS, normal recording does not pause other apps' audio — the one exception is Bluetooth. Opening a Bluetooth headset's *microphone* forces it from A2DP (stereo playback) into HFP/SCO (mono call mode), which cuts/degrades music playing on that same earpiece. USB/built-in mics are separate HAL devices and never touch the earpiece. (Confirmed by probe: the DJI "Wireless Mic Rx" is USB, so the current AirPods-out + DJI-in setup already never interrupts music.)
+- Change:
+  - `AudioDeviceManager` gains `transportType()`, `isBluetooth()`, `defaultInputDeviceID()`, and `resolveCaptureUID(selected:)`. The resolver respects an explicit mic selection (the user asked for it, Bluetooth or not) but, in **System default** mode, if the default input is a Bluetooth earpiece it falls back to the first non-Bluetooth input — so Hushly never silently grabs the earpiece mic and kills playback.
+  - Both capture paths (`EngineRecorder.start`, `RealtimeSession.start`) now pass the resolved UID instead of the raw preference.
+- Verified: build clean (no warnings), `codesign --verify --deep --strict` passes, `tsc --noEmit` clean, lint unchanged (1 pre-existing warning). Runtime-probed transport types: Wireless Mic Rx = `usb`, MacBook Pro Microphone = `bltn`, all `bluetooth=false`; `resolveCaptureUID("")` → "" (safe default), `resolveCaptureUID(WirelessMicRx)` → the DJI USB device.
+- Reversible by: reverting the git commit that contains this entry and the matching file changes.
+- Sparkle approval: not requested.
+
 ### Output device selection (system default output picker)
 
 - Status: local only, not shipped to Sparkle. No server changes.
