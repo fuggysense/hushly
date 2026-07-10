@@ -148,8 +148,7 @@ enum AudioDeviceManager {
     }
   }
 
-  // UID of the current system default output, so the picker can preselect it.
-  static func defaultOutputDeviceUID() -> String? {
+  static func defaultOutputDeviceID() -> AudioDeviceID? {
     var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
     var deviceID = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -158,7 +157,21 @@ enum AudioDeviceManager {
         AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
       deviceID != 0
     else { return nil }
-    return stringProperty(deviceID, kAudioDevicePropertyDeviceUID)
+    return deviceID
+  }
+
+  // UID of the current system default output, so the picker can preselect it.
+  static func defaultOutputDeviceUID() -> String? {
+    guard let id = defaultOutputDeviceID() else { return nil }
+    return stringProperty(id, kAudioDevicePropertyDeviceUID)
+  }
+
+  // True when you're listening through a Bluetooth device. Used to suppress
+  // Hushly's own feedback sounds there: opening a short playback stream on a BT
+  // earpiece renegotiates its A2DP link and audibly stops/resumes any music.
+  static func isDefaultOutputBluetooth() -> Bool {
+    guard let id = defaultOutputDeviceID() else { return false }
+    return isBluetooth(id)
   }
 
   // Flip the system default output to the chosen device. Returns false if the

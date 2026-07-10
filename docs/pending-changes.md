@@ -4,6 +4,18 @@ This file tracks local changes that have not been shipped through Sparkle.
 
 ## 2026-07-10
 
+### Fix: recording pop cue interrupted Bluetooth music (stop/resume)
+
+- Status: local only, not shipped to Sparkle. No server changes.
+- Major-change count: 1 (feedback sound no longer glitches earpiece music).
+- Scope: `desktop/macos/AudioCapture.swift`, `desktop/macos/HushlyLite.swift`.
+- Symptom: music on AirPods audibly stopped then continued every time dictation started (and stopped).
+- Root cause (diagnosed by harness, not guessed): the capture `AVAudioEngine` uses a single shared HAL I/O unit, and once the chosen mic (USB "Wireless Mic Rx", id 105) is applied, *both* the engine's input and output nodes bind to that USB device — the engine never touches the AirPods (id 112). The actual interrupter was `playStartSound()`/`playStopSound()` (`Pop.aiff` via `NSSound`), which plays through the **default output** = the AirPods. Opening that short playback stream renegotiates the AirPods A2DP link, so whatever's playing stops and resumes. Fires on start in both batch (`beginRecorder`) and realtime (`beginRealtimeSession`), and on every stop path.
+- Change: `AudioDeviceManager` gains `defaultOutputDeviceID()` + `isDefaultOutputBluetooth()` (and `defaultOutputDeviceUID()` now reuses the ID). `playPopSound()` returns early when the default output is Bluetooth — the tablet already shows recording state visually, so no audible cue is lost that matters, and the A2DP stream is never disturbed. Wired/built-in output still gets the pop.
+- Verified: build clean (no warnings), `codesign --verify --deep --strict` passes, `tsc --noEmit` clean. Harness confirmed the shared-unit device binding (input+output both → USB mic after apply, AirPods untouched) and transport types (AirPods = Bluetooth). Audible confirmation needs the installed build — user to verify.
+- Reversible by: reverting the git commit that contains this entry and the matching file changes.
+- Sparkle approval: not requested.
+
 ### Don't interrupt earpiece music: never auto-open a Bluetooth mic
 
 - Status: local only, not shipped to Sparkle. No server changes.

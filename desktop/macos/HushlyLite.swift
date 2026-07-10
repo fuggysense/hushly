@@ -2769,6 +2769,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   }
 
   private func playPopSound() {
+    // The pop is just a start/stop cue. Playing it opens a short output stream
+    // on the default device, and on a Bluetooth earpiece that renegotiates the
+    // A2DP link — music audibly stops and resumes. Skip it entirely when you're
+    // on Bluetooth; the tablet already shows recording state visually.
+    guard !AudioDeviceManager.isDefaultOutputBluetooth() else { return }
+
     guard let popSound else {
       NSSound.beep()
       return
