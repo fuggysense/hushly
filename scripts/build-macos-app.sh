@@ -30,10 +30,12 @@ swiftc \
   -F "$SPARKLE_CACHE" \
   "$ROOT/desktop/macos/HushlyLite.swift" \
   "$ROOT/desktop/macos/RealtimeSession.swift" \
+  "$ROOT/desktop/macos/AudioCapture.swift" \
   -framework Cocoa \
   -framework ApplicationServices \
   -framework AVFoundation \
   -framework AudioToolbox \
+  -framework CoreAudio \
   -framework Sparkle \
   -Xlinker -rpath \
   -Xlinker @executable_path/../Frameworks \

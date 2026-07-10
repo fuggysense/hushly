@@ -2,6 +2,23 @@
 
 This file tracks local changes that have not been shipped through Sparkle.
 
+## 2026-07-10
+
+### Microphone input selection + realtime Escape double-count fix
+
+- Status: local only, not shipped to Sparkle. No server changes.
+- Major-change count: 2 (selectable input device across both capture modes; realtime Escape now keeps its live transcript instead of forcing a re-transcribe).
+- Scope: `desktop/macos/AudioCapture.swift` (new), `desktop/macos/RealtimeSession.swift`, `desktop/macos/HushlyLite.swift`, `scripts/build-macos-app.sh`.
+- Change:
+  - New `AudioCapture.swift`: `AudioDeviceManager` enumerates CoreAudio input devices (filters out output-only), resolves the system default's name, and points an `AVAudioEngine` input node at a chosen device UID (`kAudioOutputUnitProperty_CurrentDevice`). `PCM16` holds the shared 16 kHz mono Int16 conversion + metering. `EngineRecorder` replaces `AVAudioRecorder` for batch dictation so device selection applies to batch too — it taps the selected device and writes a 16 kHz mono Int16 WAV (uploaded to `/transcribe` as `audio/wav`; the WAV path + `.wav` retry audio already existed for realtime). The AVAudioFile is pinned to Int16/interleaved to avoid the known processing-format SIGTRAP.
+  - Settings pane gains a **Microphone** popup (top of the Settings tab): "System default (<name>)" plus every input device; persisted as `Preferences.inputDeviceUID` (empty = follow system default). The list re-enumerates each time Settings refreshes; a saved device that's been unplugged falls back to System default. Applied to both realtime (`RealtimeSession.start(inputDeviceUID:)`) and batch (`EngineRecorder.start(inputDeviceUID:)`). Fixes system/virtual audio (e.g. BlackHole) seeping into transcripts while commenting on a playing video — pick the physical mic.
+  - Realtime **Escape** (`cancelRealtimeForRetry`) now captures the transcript the live session already streamed and saves it to History as a "Captured (live)" entry (audio still attached), instead of saving an audio-only "Saved for retry" row. Previously Escape discarded the already-transcribed text and the History **Retry** ran Deepgram a second time on the same audio — double-counting usage for one utterance. Empty-transcript Escape still falls back to the audio-only retry entry so nothing is lost. Escape still does not paste (unchanged intent).
+  - `startGlowAnimation` no longer polls `AVAudioRecorder.averagePower`; both modes push levels through their `onLevel` callback and the timer only advances the waveform phase.
+  - Build script compiles the new file and links `CoreAudio`.
+- Verified: `scripts/build-macos-app.sh` builds clean (no warnings); `codesign --verify --deep --strict` passes. Runtime-probed CoreAudio enumeration (found MacBook Pro Microphone, BlackHole 2ch, iPhone mic; `AudioUnitSetProperty` returned 0; input format read back 48 kHz/1ch after apply) and the `EngineRecorder` WAV write (1.2 s → valid 16 kHz WAV, no SIGTRAP).
+- Reversible by: reverting the git commit that contains this entry and the matching file changes (delete `desktop/macos/AudioCapture.swift`, restore the build-script line).
+- Sparkle approval: not requested.
+
 ## 2026-07-05
 
 ### Liquid Glass Tablet + Realtime Transcription

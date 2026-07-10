@@ -35,7 +35,7 @@ final class RealtimeSession: NSObject, @unchecked Sendable {
     interleaved: true
   )!
 
-  func start(url: URL, apiKey: String) throws {
+  func start(url: URL, apiKey: String, inputDeviceUID: String = "") throws {
     var request = URLRequest(url: url)
     if !apiKey.isEmpty {
       request.setValue(apiKey, forHTTPHeaderField: "X-Hushly-API-Key")
@@ -46,6 +46,9 @@ final class RealtimeSession: NSObject, @unchecked Sendable {
     receiveNextMessage()
 
     let input = engine.inputNode
+    // Route away from the system default (e.g. a virtual/system-audio input)
+    // before we read the input format. No-op when the UID is empty/missing.
+    AudioDeviceManager.apply(uid: inputDeviceUID, to: engine)
     let inputFormat = input.outputFormat(forBus: 0)
     guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
       throw HushlyError.api("No microphone input available")

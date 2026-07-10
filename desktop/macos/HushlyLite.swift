@@ -86,10 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var eventHandlerRef: EventHandlerRef?
   private var escapeLocalMonitor: Any?
   private var escapeGlobalMonitor: Any?
-  private var recorder: AVAudioRecorder?
+  private var recorder: EngineRecorder?
   private var recordingURL: URL?
   private var realtimeSession: RealtimeSession?
   private var transcriptionModeControl: NSSegmentedControl?
+  private var inputDevicePopup: NSPopUpButton?
   private var tabletBlurView: NSVisualEffectView?
   private var modePillButton: NSButton?
   // Current height of the live sheet; grows (never shrinks) within a session.
@@ -462,22 +463,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       return
     }
     do {
-      let fileURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("hushly-\(UUID().uuidString)")
-        .appendingPathExtension("m4a")
-      let settings: [String: Any] = [
-        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-        AVSampleRateKey: 44_100,
-        AVNumberOfChannelsKey: 1,
-        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-      ]
-      let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
-      recorder.isMeteringEnabled = true
-      recorder.prepareToRecord()
-      recorder.record()
+      let recorder = EngineRecorder()
+      recorder.onLevel = { [weak self] level in
+        guard let self else { return }
+        self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (level * 0.32)
+        self.tabletView.audioLevel = self.smoothedAudioLevel
+      }
+      try recorder.start(inputDeviceUID: Preferences.shared.inputDeviceUID)
 
       self.recorder = recorder
-      self.recordingURL = fileURL
+      self.recordingURL = recorder.recordingURL
       self.isRecording = true
       self.smoothedAudioLevel = 0
       self.tabletView.isRecording = true
@@ -515,7 +510,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     }
 
     do {
-      try session.start(url: realtimeURL(), apiKey: Preferences.shared.apiKey)
+      try session.start(
+        url: realtimeURL(),
+        apiKey: Preferences.shared.apiKey,
+        inputDeviceUID: Preferences.shared.inputDeviceUID)
     } catch {
       // Don't leak the already-opened socket or the temp WAV.
       session.cancel()
@@ -632,11 +630,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     removeEscapeMonitors()
     stopGlowAnimation()
     playStopSound()
+
+    // Escape aborts the paste, but the live session has ALREADY transcribed
+    // these words (they're on the tablet). Keep that transcript in History so
+    // the user never has to hit Retry — retrying would run Deepgram a second
+    // time on the same audio, double-counting usage for one utterance.
+    let captured = session.transcript().trimmingCharacters(in: .whitespacesAndNewlines)
     session.cancel()
 
-    if let fileURL = session.recordingURL,
-      let savedURL = try? TranscriptStore.shared.storeAudio(fileURL)
-    {
+    let savedURL = session.recordingURL.flatMap { try? TranscriptStore.shared.storeAudio($0) }
+
+    if !captured.isEmpty {
+      insertHistoryEntry(
+        TranscriptEntry(
+          id: UUID().uuidString,
+          createdAt: Date(),
+          rawText: captured,
+          cleanedText: captured,
+          audioPath: savedURL?.path,
+          status: "Captured (live)"
+        )
+      )
+      setStatus("Saved (not pasted)")
+    } else if let savedURL {
+      // Nothing streamed before Escape — fall back to an audio-only entry so
+      // the take can still be recovered from History.
       insertHistoryEntry(
         TranscriptEntry(
           id: UUID().uuidString,
@@ -648,9 +666,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
         )
       )
       setStatus("Saved for retry")
-      try? FileManager.default.removeItem(at: fileURL)
     } else {
       setStatus("Cancelled")
+    }
+
+    if let fileURL = session.recordingURL {
+      try? FileManager.default.removeItem(at: fileURL)
     }
     hideTablet(after: 1.2)
   }
@@ -1032,6 +1053,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
       content.addSubview(label)
     }
 
+    let micLabel = NSTextField(labelWithString: "Microphone")
+    micLabel.frame = NSRect(x: 32, y: 696, width: 120, height: 18)
+    content.addSubview(micLabel)
+
+    let micPopup = NSPopUpButton(frame: NSRect(x: 168, y: 690, width: 396, height: 30), pullsDown: false)
+    micPopup.target = self
+    micPopup.action = #selector(inputDeviceChanged)
+    micPopup.toolTip =
+      "Which microphone to capture from. Pick your physical mic to keep system / video audio out of the transcript. System default follows System Settings."
+    content.addSubview(micPopup)
+    inputDevicePopup = micPopup
+    reloadInputDevicePopup()
+
     let textLabel = NSTextField(labelWithString: "Tablet text")
     textLabel.frame = NSRect(x: 32, y: 636, width: 120, height: 18)
     content.addSubview(textLabel)
@@ -1266,6 +1300,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let mode: TranscriptionMode = transcriptionModeControl?.selectedSegment == 1 ? .realtime : .batch
     Preferences.shared.transcriptionMode = mode
     setStatus(mode == .realtime ? "Live transcription on" : "Transcribe on stop")
+  }
+
+  // Rebuild the mic list from CoreAudio (devices come and go), keeping a leading
+  // "System default" row that maps to an empty UID.
+  private func reloadInputDevicePopup() {
+    guard let popup = inputDevicePopup else { return }
+    popup.removeAllItems()
+
+    let defaultName = AudioDeviceManager.defaultInputDeviceName()
+    let systemTitle = defaultName.map { "System default (\($0))" } ?? "System default"
+    popup.addItem(withTitle: systemTitle)
+    popup.lastItem?.representedObject = ""
+
+    for device in AudioDeviceManager.inputDevices() {
+      popup.addItem(withTitle: device.name)
+      popup.lastItem?.representedObject = device.uid
+    }
+
+    selectInputDeviceItem()
+  }
+
+  private func selectInputDeviceItem() {
+    guard let popup = inputDevicePopup else { return }
+    let saved = Preferences.shared.inputDeviceUID
+    // A saved device that's since been unplugged falls back to System default.
+    let index = popup.itemArray.firstIndex { ($0.representedObject as? String) == saved }
+    popup.selectItem(at: index ?? 0)
+  }
+
+  @objc private func inputDeviceChanged() {
+    let uid = inputDevicePopup?.selectedItem?.representedObject as? String ?? ""
+    Preferences.shared.inputDeviceUID = uid
+    setStatus("Mic: \(inputDevicePopup?.selectedItem?.title ?? "System default")")
   }
 
   private func buildDictionaryPane(frame: NSRect) -> NSView {
@@ -1562,6 +1629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     usageStatusLabel?.stringValue = usageStatusText()
     shortcutButton?.title = Preferences.shared.shortcut.title
     transcriptionModeControl?.selectedSegment = Preferences.shared.transcriptionMode == .realtime ? 1 : 0
+    reloadInputDevicePopup()
     refreshAccessibilityStatus()
   }
 
@@ -2591,15 +2659,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     animationTimer?.invalidate()
     animationTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
       guard let self else { return }
-      // Realtime sessions push levels via RealtimeSession.onLevel; the timer
-      // then only drives the waveform's phase animation.
-      if let recorder = self.recorder {
-        recorder.updateMeters()
-        let averagePower = recorder.averagePower(forChannel: 0)
-        let normalized = max(0, min(1, CGFloat((averagePower + 50) / 50)))
-        self.smoothedAudioLevel = (self.smoothedAudioLevel * 0.68) + (normalized * 0.32)
-        self.tabletView.audioLevel = self.smoothedAudioLevel
-      }
+      // Both batch (EngineRecorder.onLevel) and realtime (RealtimeSession.onLevel)
+      // push audio levels via callback; the timer only drives the waveform's
+      // phase animation.
       self.tabletView.needsDisplay = true
     }
   }
@@ -3285,6 +3347,7 @@ final class Preferences {
   private let keywordsTextKey = "keywordsText"
   private let polishWithGPTKey = "polishWithGPT"
   private let transcriptionModeKey = "transcriptionMode"
+  private let inputDeviceUIDKey = "inputDeviceUID"
   private let tabletImageOpacityKey = "tabletImageOpacity"
   private let tabletOriginalImagePathKey = "tabletOriginalImagePath"
   private let tabletImageZoomKey = "tabletImageZoom"
@@ -3478,6 +3541,18 @@ final class Preferences {
     }
     set {
       defaults.set(newValue.rawValue, forKey: transcriptionModeKey)
+    }
+  }
+
+  // CoreAudio device UID of the microphone to capture from. Empty = follow the
+  // system default input. Applied to both batch and realtime capture so system
+  // audio from a virtual input can't seep into a dictation.
+  var inputDeviceUID: String {
+    get {
+      defaults.string(forKey: inputDeviceUIDKey) ?? ""
+    }
+    set {
+      defaults.set(newValue, forKey: inputDeviceUIDKey)
     }
   }
 
