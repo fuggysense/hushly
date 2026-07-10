@@ -13,6 +13,12 @@ struct AudioInputDevice: Equatable {
   let name: String
 }
 
+struct AudioOutputDevice: Equatable {
+  let id: AudioDeviceID
+  let uid: String
+  let name: String
+}
+
 enum AudioDeviceManager {
   // All input devices CoreAudio can see, in HAL order. Excludes output-only
   // devices (no input streams) so the picker never lists e.g. the speakers.
@@ -74,6 +80,59 @@ enum AudioDeviceManager {
       UInt32(MemoryLayout<AudioDeviceID>.size))
   }
 
+  // Output devices CoreAudio can see (excludes input-only), for the "Output"
+  // picker. Selecting one flips the *system* default output — Hushly doesn't own
+  // a private playback device, it just changes the OS default so e.g. AirPods
+  // stay your listening device while a separate mic feeds capture.
+  static func outputDevices() -> [AudioOutputDevice] {
+    var address = propertyAddress(kAudioHardwarePropertyDevices)
+    var dataSize: UInt32 = 0
+    guard
+      AudioObjectGetPropertyDataSize(
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize) == noErr,
+      dataSize > 0
+    else { return [] }
+
+    let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+    var ids = [AudioDeviceID](repeating: 0, count: count)
+    guard
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &ids) == noErr
+    else { return [] }
+
+    return ids.compactMap { id in
+      guard hasOutputStreams(id), let uid = stringProperty(id, kAudioDevicePropertyDeviceUID)
+      else { return nil }
+      let name = stringProperty(id, kAudioObjectPropertyName) ?? "Speaker"
+      return AudioOutputDevice(id: id, uid: uid, name: name)
+    }
+  }
+
+  // UID of the current system default output, so the picker can preselect it.
+  static func defaultOutputDeviceUID() -> String? {
+    var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
+    var deviceID = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    guard
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
+      deviceID != 0
+    else { return nil }
+    return stringProperty(deviceID, kAudioDevicePropertyDeviceUID)
+  }
+
+  // Flip the system default output to the chosen device. Returns false if the
+  // UID no longer resolves (device unplugged) so the caller can resync the list.
+  @discardableResult
+  static func setDefaultOutputDevice(uid: String) -> Bool {
+    guard let id = outputDevices().first(where: { $0.uid == uid })?.id else { return false }
+    var deviceID = id
+    var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
+    return AudioObjectSetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+      UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID) == noErr
+  }
+
   private static func propertyAddress(
     _ selector: AudioObjectPropertySelector,
     _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
@@ -85,6 +144,24 @@ enum AudioDeviceManager {
   private static func hasInputStreams(_ id: AudioDeviceID) -> Bool {
     var address = propertyAddress(
       kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyScopeInput)
+    var dataSize: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &dataSize) == noErr, dataSize > 0
+    else { return false }
+
+    let buffer = UnsafeMutableRawPointer.allocate(
+      byteCount: Int(dataSize), alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { buffer.deallocate() }
+    guard AudioObjectGetPropertyData(id, &address, 0, nil, &dataSize, buffer) == noErr else {
+      return false
+    }
+    let list = UnsafeMutableAudioBufferListPointer(
+      buffer.assumingMemoryBound(to: AudioBufferList.self))
+    return list.contains { $0.mNumberChannels > 0 }
+  }
+
+  private static func hasOutputStreams(_ id: AudioDeviceID) -> Bool {
+    var address = propertyAddress(
+      kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyScopeOutput)
     var dataSize: UInt32 = 0
     guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &dataSize) == noErr, dataSize > 0
     else { return false }

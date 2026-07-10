@@ -4,6 +4,19 @@ This file tracks local changes that have not been shipped through Sparkle.
 
 ## 2026-07-10
 
+### Output device selection (system default output picker)
+
+- Status: local only, not shipped to Sparkle. No server changes.
+- Major-change count: 1 (pick the system audio output device from Settings).
+- Scope: `desktop/macos/AudioCapture.swift`, `desktop/macos/HushlyLite.swift`.
+- Change:
+  - `AudioDeviceManager` gains `outputDevices()` (enumerates CoreAudio devices with output streams via a new `hasOutputStreams` scope-output check; excludes input-only), `defaultOutputDeviceUID()`, and `setDefaultOutputDevice(uid:)` (flips `kAudioHardwarePropertyDefaultOutputDevice`). New `AudioOutputDevice` struct parallels `AudioInputDevice`.
+  - Settings pane gains an **Output** popup directly above **Microphone**. Unlike the mic picker, there is **no stored preference** — the OS default output is the single source of truth, so the popup preselects the live system default and selecting an entry flips the system default output (mirrors macOS Sound). This lets you keep AirPods as your listening device while a separate mic (e.g. "Wireless Mic Rx") feeds capture, all from one place. If the chosen device vanished between listing and selecting, `setDefaultOutputDevice` returns false and the popup resyncs.
+  - Settings window height 800 → 860 to fit the new row; existing controls are bottom-anchored so none moved.
+- Verified: `scripts/build-macos-app.sh` builds clean (no warnings); `codesign --verify --deep --strict` passes. Runtime-probed CoreAudio: `outputDevices()` returned AirPods Pro / BlackHole 2ch / MacBook Pro Speakers (input-only excluded), `defaultOutputDeviceUID()` read back the current AirPods default, `setDefaultOutputDevice(current)` → true, `setDefaultOutputDevice(bogus)` → false.
+- Reversible by: reverting the git commit that contains this entry and the matching file changes.
+- Sparkle approval: not requested.
+
 ### Microphone input selection + realtime Escape double-count fix
 
 - Status: local only, not shipped to Sparkle. No server changes.

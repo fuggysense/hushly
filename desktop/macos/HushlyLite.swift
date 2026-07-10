@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
   private var realtimeSession: RealtimeSession?
   private var transcriptionModeControl: NSSegmentedControl?
   private var inputDevicePopup: NSPopUpButton?
+  private var outputDevicePopup: NSPopUpButton?
   private var tabletBlurView: NSVisualEffectView?
   private var modePillButton: NSButton?
   // Current height of the live sheet; grows (never shrinks) within a session.
@@ -996,7 +997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
 
   private func buildSettingsWindow() {
     let width: CGFloat = 620
-    let height: CGFloat = 800
+    let height: CGFloat = 860
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable],
@@ -1065,6 +1066,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     content.addSubview(micPopup)
     inputDevicePopup = micPopup
     reloadInputDevicePopup()
+
+    let outputLabel = NSTextField(labelWithString: "Output")
+    outputLabel.frame = NSRect(x: 32, y: 756, width: 120, height: 18)
+    content.addSubview(outputLabel)
+
+    let outputPopup = NSPopUpButton(frame: NSRect(x: 168, y: 750, width: 396, height: 30), pullsDown: false)
+    outputPopup.target = self
+    outputPopup.action = #selector(outputDeviceChanged)
+    outputPopup.toolTip =
+      "Which device your Mac plays sound through. Point this at your headphones/AirPods and pick a separate Microphone below to listen and speak on different devices. Changes the system default output."
+    content.addSubview(outputPopup)
+    outputDevicePopup = outputPopup
+    reloadOutputDevicePopup()
 
     let textLabel = NSTextField(labelWithString: "Tablet text")
     textLabel.frame = NSRect(x: 32, y: 636, width: 120, height: 18)
@@ -1333,6 +1347,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     let uid = inputDevicePopup?.selectedItem?.representedObject as? String ?? ""
     Preferences.shared.inputDeviceUID = uid
     setStatus("Mic: \(inputDevicePopup?.selectedItem?.title ?? "System default")")
+  }
+
+  // Output list mirrors macOS Sound: every device it plays through, with the
+  // current system default preselected. No stored preference — the OS default
+  // is the single source of truth, so we reflect it rather than fight it.
+  private func reloadOutputDevicePopup() {
+    guard let popup = outputDevicePopup else { return }
+    popup.removeAllItems()
+    for device in AudioDeviceManager.outputDevices() {
+      popup.addItem(withTitle: device.name)
+      popup.lastItem?.representedObject = device.uid
+    }
+    let currentUID = AudioDeviceManager.defaultOutputDeviceUID()
+    if let index = popup.itemArray.firstIndex(where: { ($0.representedObject as? String) == currentUID }) {
+      popup.selectItem(at: index)
+    }
+  }
+
+  @objc private func outputDeviceChanged() {
+    guard let uid = outputDevicePopup?.selectedItem?.representedObject as? String, !uid.isEmpty
+    else { return }
+    if AudioDeviceManager.setDefaultOutputDevice(uid: uid) {
+      setStatus("Output: \(outputDevicePopup?.selectedItem?.title ?? "")")
+    } else {
+      // Device vanished between listing and selecting — resync to reality.
+      reloadOutputDevicePopup()
+      setStatus("Output device unavailable")
+    }
   }
 
   private func buildDictionaryPane(frame: NSRect) -> NSView {
@@ -1630,6 +1672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTa
     shortcutButton?.title = Preferences.shared.shortcut.title
     transcriptionModeControl?.selectedSegment = Preferences.shared.transcriptionMode == .realtime ? 1 : 0
     reloadInputDevicePopup()
+    reloadOutputDevicePopup()
     refreshAccessibilityStatus()
   }
 
